@@ -1,0 +1,57 @@
+2026-04-19 18:31:48 [WARNING] Git init failed (non-fatal): Not a git repository: D:\RepoPilot
+2026-04-19 18:31:48 [INFO]   Task: Fix all failing tests in test_utils.py. Add proper ValueError guards to calculate_average, find_max, normalize, and pars
+2026-04-19 18:31:48 [INFO]   Repo: D:\RepoPilot
+2026-04-19 18:31:48 [DEBUG]   Context: 10 files, 54919 chars
+2026-04-19 18:31:48 [DEBUG]     - modules\test_utils.py
+2026-04-19 18:31:48 [DEBUG]     - main.py
+2026-04-19 18:31:48 [DEBUG]     - demo_run.py
+2026-04-19 18:31:48 [DEBUG]     - modules\agent_loop.py
+2026-04-19 18:31:48 [DEBUG]     - modules\utils.py
+2026-04-19 18:31:48 [DEBUG]     - modules\sandbox.py
+2026-04-19 18:31:48 [DEBUG]     - modules\llm_client.py
+2026-04-19 18:31:48 [DEBUG]     - modules\code_modifier.py
+2026-04-19 18:31:48 [DEBUG]     ... and 2 more
+2026-04-19 18:31:48 [INFO]      Confidence: 0.97 | Done: True | Changes: 1
+2026-04-19 18:31:48 [INFO]      [modify] utils.py
+2026-04-19 18:31:49 [INFO]      cmd: python3 -m pytest
+2026-04-19 18:31:49 [DEBUG]      stderr:
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+2026-04-19 18:31:49 [DEBUG]   Context: 12 files, 58263 chars
+2026-04-19 18:31:49 [DEBUG]     - modules\test_utils.py
+2026-04-19 18:31:49 [DEBUG]     - main.py
+2026-04-19 18:31:49 [DEBUG]     - demo_run.py
+2026-04-19 18:31:49 [DEBUG]     - modules\agent_loop.py
+2026-04-19 18:31:49 [DEBUG]     - utils.py
+2026-04-19 18:31:49 [DEBUG]     - modules\utils.py
+2026-04-19 18:31:49 [DEBUG]     - modules\sandbox.py
+2026-04-19 18:31:49 [DEBUG]     - modules\llm_client.py
+2026-04-19 18:31:49 [DEBUG]     ... and 4 more
+2026-04-19 18:31:49 [INFO]      Confidence: 0.97 | Done: True | Changes: 1
+2026-04-19 18:31:49 [INFO]      [modify] utils.py
+2026-04-19 18:31:49 [DEBUG]      Backup: D:\RepoPilot\backups\20260419_183148__utils.py
+2026-04-19 18:31:49 [INFO]      cmd: python3 -m pytest
+2026-04-19 18:31:49 [DEBUG]      stderr:
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+2026-04-19 18:31:49 [DEBUG]   Context: 12 files, 59514 chars
+2026-04-19 18:31:49 [DEBUG]     - modules\test_utils.py
+2026-04-19 18:31:49 [DEBUG]     - main.py
+2026-04-19 18:31:49 [DEBUG]     - demo_run.py
+2026-04-19 18:31:49 [DEBUG]     - modules\agent_loop.py
+2026-04-19 18:31:49 [DEBUG]     - utils.py
+2026-04-19 18:31:49 [DEBUG]     - backups\20260419_183148__utils.py
+2026-04-19 18:31:49 [DEBUG]     - modules\utils.py
+2026-04-19 18:31:49 [DEBUG]     - modules\sandbox.py
+2026-04-19 18:31:49 [DEBUG]     ... and 4 more
+2026-04-19 18:31:49 [INFO]      Confidence: 0.97 | Done: True | Changes: 1
+2026-04-19 18:31:49 [INFO]      [modify] utils.py
+2026-04-19 18:31:49 [DEBUG]      Backup: D:\RepoPilot\backups\20260419_183148__utils.py
+2026-04-19 18:31:49 [INFO]      cmd: python3 -m pytest
+2026-04-19 18:31:49 [DEBUG]      stderr:
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+2026-04-19 18:31:49 [WARNING] Rolling back changes...
+2026-04-19 18:31:49 [INFO] Rolled back: ['utils.py']
+2026-04-19 18:31:49 [INFO]   Logs: D:\RepoPilot\logs\demo_20260419_183148_ae2caf_human.log
+2026-04-19 18:31:49 [INFO]   Summary: D:\RepoPilot\logs\demo_20260419_183148_ae2caf_summary.json

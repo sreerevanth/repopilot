@@ -1,0 +1,41 @@
+2026-04-19 18:53:42 [WARNING] Git init failed (non-fatal): Not a git repository: D:\RepoPilot
+2026-04-19 18:53:42 [INFO] Run started: demo_20260419_185342_cfd09d
+2026-04-19 18:53:42 [INFO]   Task: Fix all failing tests in test_utils.py. Add proper ValueError guards to calculate_average, find_max, normalize, and pars
+2026-04-19 18:53:42 [INFO]   Repo: D:\RepoPilot
+2026-04-19 18:53:42 [INFO] 
+------------------------------------------------------------
+2026-04-19 18:53:42 [INFO] Iteration 1
+2026-04-19 18:53:42 [DEBUG]   Context: 13 files, 59740 chars
+2026-04-19 18:53:42 [DEBUG]     - modules\test_utils.py
+2026-04-19 18:53:42 [DEBUG]     - main.py
+2026-04-19 18:53:42 [DEBUG]     - demo_run.py
+2026-04-19 18:53:42 [DEBUG]     - modules\agent_loop.py
+2026-04-19 18:53:42 [DEBUG]     - utils.py
+2026-04-19 18:53:42 [DEBUG]     - backups\20260419_183148__utils.py
+2026-04-19 18:53:42 [DEBUG]     - backups\20260419_184736__utils.py
+2026-04-19 18:53:42 [DEBUG]     - modules\utils.py
+2026-04-19 18:53:42 [DEBUG]     ... and 5 more
+2026-04-19 18:53:42 [INFO]   LLM analysis: The utils.py functions lack input validation. I need to add empty-list guards to calculate_average and find_max, add a constant-check to normalize, and add proper error handling to parse_int_list.
+2026-04-19 18:53:42 [INFO]      Confidence: 0.97 | Done: True | Changes: 1
+2026-04-19 18:53:42 [INFO]      [modify] utils.py
+2026-04-19 18:53:42 [INFO]   OK Apply [modify] utils.py
+2026-04-19 18:53:42 [DEBUG]      Backup: D:\RepoPilot\backups\20260419_185342__utils.py
+2026-04-19 18:53:48 [INFO]   PASS | exit=0 | 6.5s
+2026-04-19 18:53:48 [INFO]      cmd: 'C:\Users\sreer_mg\AppData\Local\Programs\Python\Python314\python.exe' -m pytest
+2026-04-19 18:53:48 [DEBUG]      stdout:
+============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.0.3, pluggy-1.6.0
+rootdir: D:\RepoPilot
+plugins: anyio-4.12.1, dash-4.0.0, langsmith-0.7.12
+collected 14 items
+
+modules\test_utils.py ..............                                     [100%]
+
+============================= 14 passed in 0.11s ==============================
+
+2026-04-19 18:53:48 [INFO] 
+✅ Tests passed on iteration 1!
+2026-04-19 18:53:48 [INFO] 
+Run finished: success
+2026-04-19 18:53:48 [INFO]   Logs: D:\RepoPilot\logs\demo_20260419_185342_cfd09d_human.log
+2026-04-19 18:53:48 [INFO]   Summary: D:\RepoPilot\logs\demo_20260419_185342_cfd09d_summary.json

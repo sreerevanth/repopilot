@@ -1,0 +1,41 @@
+2026-04-19 18:47:36 [WARNING] Git init failed (non-fatal): Not a git repository: D:\RepoPilot
+2026-04-19 18:47:36 [INFO] ▶ Run started: demo_20260419_184736_653b18
+2026-04-19 18:47:36 [INFO]   Task: Fix all failing tests in test_utils.py. Add proper ValueError guards to calculate_average, find_max, normalize, and pars
+2026-04-19 18:47:36 [INFO]   Repo: D:\RepoPilot
+2026-04-19 18:47:36 [INFO] 
+────────────────────────────────────────────────────────────
+2026-04-19 18:47:36 [INFO] 🔄 Iteration 1
+2026-04-19 18:47:36 [DEBUG]   Context: 12 files, 58058 chars
+2026-04-19 18:47:36 [DEBUG]     - modules\test_utils.py
+2026-04-19 18:47:36 [DEBUG]     - main.py
+2026-04-19 18:47:36 [DEBUG]     - demo_run.py
+2026-04-19 18:47:36 [DEBUG]     - modules\agent_loop.py
+2026-04-19 18:47:36 [DEBUG]     - utils.py
+2026-04-19 18:47:36 [DEBUG]     - backups\20260419_183148__utils.py
+2026-04-19 18:47:36 [DEBUG]     - modules\utils.py
+2026-04-19 18:47:36 [DEBUG]     - modules\sandbox.py
+2026-04-19 18:47:36 [DEBUG]     ... and 4 more
+2026-04-19 18:47:36 [INFO]   🤖 LLM analysis: The utils.py functions lack input validation. I need to add empty-list guards to calculate_average and find_max, add a constant-check to normalize, and add proper error handling to parse_int_list.
+2026-04-19 18:47:36 [INFO]      Confidence: 0.97 | Done: True | Changes: 1
+2026-04-19 18:47:36 [INFO]      [modify] utils.py
+2026-04-19 18:47:36 [INFO]   ✓ Apply [modify] utils.py
+2026-04-19 18:47:36 [DEBUG]      Backup: D:\RepoPilot\backups\20260419_184736__utils.py
+2026-04-19 18:47:53 [INFO]   ✓ PASS | exit=0 | 16.3s
+2026-04-19 18:47:53 [INFO]      cmd: 'C:\Users\sreer_mg\AppData\Local\Programs\Python\Python314\python.exe' -m pytest
+2026-04-19 18:47:53 [DEBUG]      stdout:
+============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.0.3, pluggy-1.6.0
+rootdir: D:\RepoPilot
+plugins: anyio-4.12.1, dash-4.0.0, langsmith-0.7.12
+collected 14 items
+
+modules\test_utils.py ..............                                     [100%]
+
+============================= 14 passed in 0.14s ==============================
+
+2026-04-19 18:47:53 [INFO] 
+✅ Tests passed on iteration 1!
+2026-04-19 18:47:53 [INFO] 
+✅ Run finished: success
+2026-04-19 18:47:53 [INFO]   Logs: D:\RepoPilot\logs\demo_20260419_184736_653b18_human.log
+2026-04-19 18:47:53 [INFO]   Summary: D:\RepoPilot\logs\demo_20260419_184736_653b18_summary.json
