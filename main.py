@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.agent_loop import AutonomousAgent, AgentConfig
+from modules.code_modifier import CodeModificationEngine
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,7 +41,7 @@ Examples:
     )
 
     parser.add_argument("--repo", required=True, help="Path to the git repository")
-    parser.add_argument("--task", required=True, help="High-level task description")
+    parser.add_argument("--task", required=False, help="High-level task description (can also be provided via AGENT_TASK env var)")
 
     # Execution
     parser.add_argument("--runner", default="pytest",
@@ -90,7 +91,26 @@ Examples:
     parser.add_argument("--api-key", default=None,
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
+    # Non-interactive / CI
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Auto-approve file changes (bypass confirmation prompt)")
+
     return parser.parse_args()
+
+
+def write_github_output(outputs: dict[str, str]):
+    github_output_path = os.environ.get("GITHUB_OUTPUT")
+    if github_output_path:
+        try:
+            with open(github_output_path, "a", encoding="utf-8") as f:
+                for k, v in outputs.items():
+                    if "\n" in v:
+                        delimiter = "EOF"
+                        f.write(f"{k}<<{delimiter}\n{v}\n{delimiter}\n")
+                    else:
+                        f.write(f"{k}={v}\n")
+        except Exception as e:
+            print(f"Failed to write to GITHUB_OUTPUT: {e}", file=sys.stderr)
 
 
 def main():
@@ -98,20 +118,25 @@ def main():
 
     repo_root = os.path.abspath(args.repo)
     if args.rollback:
-    modifier = CodeModificationEngine(
-        repo_root=repo_root,
-        backup_dir="backups"
-    )
-    success = modifier.git_stash_pop(repo_root)
-    sys.exit(0 if success else 1)
+       modifier = CodeModificationEngine(repo_root=repo_root, backup_dir="backups")
+       success = modifier.git_stash_pop(repo_root)
+       sys.exit(0 if success else 1)
     if not os.path.isdir(repo_root):
         print(f"ERROR: Repository path does not exist: {repo_root}", file=sys.stderr)
         sys.exit(1)
 
+    yes_flag = args.yes or os.environ.get("CI") == "true"
+
+    task = args.task or os.environ.get("AGENT_TASK")
+    if not task:
+        print("ERROR: Task description is required. Provide --task or set the AGENT_TASK environment variable.", file=sys.stderr)
+        sys.exit(1)
+
     config = AgentConfig(
         repo_root=repo_root,
-        task=args.task,
+        task=task,
         dry_run=args.dry_run,
+        yes=yes_flag,
 
         # Execution
         test_runner=args.runner,
@@ -156,15 +181,40 @@ def main():
         print(f"MESSAGE   : {result.final_message}")
         print(f"{'='*60}")
 
+        write_github_output({
+            "outcome": result.outcome,
+            "run_id": result.run_id,
+            "iterations": str(result.iterations_used),
+            "branch_name": result.branch_name or "",
+            "pr_url": result.pr_url or "",
+            "final_message": result.final_message,
+        })
+
         sys.exit(0 if result.outcome == "success" else 1)
 
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
+        write_github_output({
+            "outcome": "aborted",
+            "run_id": "",
+            "iterations": "0",
+            "branch_name": "",
+            "pr_url": "",
+            "final_message": "Interrupted by user.",
+        })
         sys.exit(130)
     except Exception as e:
         print(f"\nFATAL ERROR: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
+        write_github_output({
+            "outcome": "error",
+            "run_id": "",
+            "iterations": "0",
+            "branch_name": "",
+            "pr_url": "",
+            "final_message": str(e),
+        })
         sys.exit(1)
 
 
