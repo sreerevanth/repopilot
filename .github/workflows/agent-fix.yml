@@ -70,22 +70,22 @@ jobs:
             if (outcome === "success") {
               commentBody = `Hello @${issuee},
 
-I have successfully fixed the issue! 🎉
+            I have successfully fixed the issue! 🎉
 
-A Pull Request has been created with the changes:
-🔗 **[Pull Request](${prUrl})**
+            A Pull Request has been created with the changes:
+            🔗 **[Pull Request](${prUrl})**
 
-**Run ID:** \`${runId}\`
-**Message:** ${message}`;
+            **Run ID:** \`${runId}\`
+            **Message:** ${message}`;
             } else {
               commentBody = `Hello @${issuee},
 
-I attempted to fix this issue automatically but encountered a problem.
+            I attempted to fix this issue automatically but encountered a problem.
 
-**Outcome:** \`${outcome || 'unknown/failed'}\`
-**Message:** ${message || 'No additional message was provided.'}
+            **Outcome:** \`${outcome || 'unknown/failed'}\`
+            **Message:** ${message || 'No additional message was provided.'}
 
-Please check the GitHub Actions workflow logs for more details.`;
+            Please check the GitHub Actions workflow logs for more details.`;
             }
 
             await github.rest.issues.createComment({
