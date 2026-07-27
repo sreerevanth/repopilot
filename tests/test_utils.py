@@ -25,5 +25,7 @@ def test_parse_int_list():
     assert parse_int_list("10") == [10]
     with pytest.raises(ValueError, match="Input string is empty"):
         parse_int_list("")
+    with pytest.raises(ValueError, match="Input string is empty"):
+        parse_int_list("   ")
     with pytest.raises(ValueError, match="invalid integer"):
         parse_int_list("1, a, 3")
