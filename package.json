@@ -4,8 +4,9 @@
   "description": "A production-grade autonomous code modification system that reads a repository,\r understands a task, modifies code using an LLM, executes tests in a sandbox,\r and iteratively self-corrects until tests pass — then commits the result to Git.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "format": "prettier --write ."
+    "test": "python -m pytest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "repository": {
     "type": "git",
