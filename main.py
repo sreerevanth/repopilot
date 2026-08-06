@@ -87,9 +87,17 @@ Examples:
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
+    # LLM provider
+    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "ollama"],
+                        help="LLM provider (default: anthropic)")
+    parser.add_argument("--model", default=None,
+                        help="Model name. Defaults per provider: claude-sonnet-4 / llama3")
+    parser.add_argument("--ollama-host", default=None,
+                        help="Ollama base URL (default: http://localhost:11434)")
+
     # API key
     parser.add_argument("--api-key", default=None,
-                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
+                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var). Unused with --provider ollama")
 
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
@@ -164,6 +172,9 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        llm_provider=args.provider,
+        llm_model=args.model,
+        ollama_host=args.ollama_host,
     )
 
     try:
