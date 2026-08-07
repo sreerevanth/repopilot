@@ -8,13 +8,28 @@ Runs code in isolation using subprocess with:
 - Optional Docker support
 """
 
+import atexit
+import logging
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from typing import Optional
+
+_LOG = logging.getLogger("agent.sandbox")
+
+# Every container this module starts is named and labelled, so a leaked one can
+# be found and removed. `--rm` alone is not enough: it is honoured by the daemon
+# when the container *exits*, and a container whose CLI was killed never does.
+CONTAINER_NAME_PREFIX = "repopilot-sandbox"
+CONTAINER_LABEL_KEY = "com.repopilot.sandbox"
+
+# Names of containers believed to be running right now, for the atexit sweep.
+_ACTIVE_CONTAINERS: set[str] = set()
+_ATEXIT_REGISTERED = False
 
 
 @dataclass
@@ -103,6 +118,57 @@ def _coerce_output(value) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+def _new_container_name() -> str:
+    return f"{CONTAINER_NAME_PREFIX}-{uuid.uuid4().hex[:12]}"
+
+
+def _force_remove_container(name: str, timeout: int = 30) -> bool:
+    """
+    Remove a container by name, tolerating the case where it is already gone.
+
+    `docker rm -f` exits non-zero with "No such container" when `--rm` already
+    cleaned up, and can transiently report "removal in progress". Neither is an
+    error worth surfacing, so this reports success/failure and never raises.
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        proc = subprocess.run(
+            ["docker", "rm", "--force", name],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _LOG.debug("could not remove container %s: %s", name, exc)
+        return False
+
+    if proc.returncode == 0:
+        _LOG.debug("removed leaked container %s", name)
+        return True
+
+    _LOG.debug("container %s not removed (likely already gone): %s",
+               name, proc.stderr.strip()[:200])
+    return False
+
+
+def _cleanup_active_containers() -> None:
+    """atexit hook. Must never raise -- it runs during interpreter shutdown."""
+    for name in list(_ACTIVE_CONTAINERS):
+        try:
+            _force_remove_container(name)
+        except Exception:  # pragma: no cover - defensive during shutdown
+            pass
+        _ACTIVE_CONTAINERS.discard(name)
+
+
+def _register_atexit_once() -> None:
+    global _ATEXIT_REGISTERED
+    if not _ATEXIT_REGISTERED:
+        atexit.register(_cleanup_active_containers)
+        _ATEXIT_REGISTERED = True
 
 
 class SubprocessSandbox:
@@ -236,6 +302,7 @@ class DockerSandbox:
         self.image = image
         self.timeout = timeout_seconds
         self._docker_available = shutil.which("docker") is not None
+        self._containers: set[str] = set()
 
     def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
         if not self._docker_available:
@@ -245,8 +312,11 @@ class DockerSandbox:
         runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
         inner_cmd = runner_cmd + (extra_args or [])
 
+        name = _new_container_name()
         docker_cmd = [
             "docker", "run", "--rm",
+            "--name", name,
+            "--label", f"{CONTAINER_LABEL_KEY}=1",
             "--network=none",
             "--memory=512m",
             "--cpus=1",
@@ -257,4 +327,70 @@ class DockerSandbox:
         ]
 
         sb = SubprocessSandbox(self.working_dir, self.timeout)
-        return sb.run(docker_cmd)
+
+        _register_atexit_once()
+        _ACTIVE_CONTAINERS.add(name)
+        self._containers.add(name)
+        try:
+            result = sb.run(docker_cmd)
+        except BaseException:
+            # KeyboardInterrupt and SystemExit reach here; the CLI is gone but
+            # the container is not, so remove it before the exception continues.
+            _force_remove_container(name)
+            raise
+        finally:
+            _ACTIVE_CONTAINERS.discard(name)
+            self._containers.discard(name)
+
+        if result.timed_out:
+            # subprocess.run kills the docker CLI with SIGKILL on timeout. That
+            # signal cannot be caught or proxied, so the container keeps running
+            # -- still holding its memory and CPU reservation -- and `--rm` will
+            # not fire because the container never exits. Remove it explicitly.
+            _LOG.warning(
+                "DockerSandbox: run timed out; force-removing container %s", name
+            )
+            _force_remove_container(name)
+
+        return result
+
+    # ── cleanup surface ───────────────────────────────────────────────
+
+    def cleanup(self) -> None:
+        """Remove any container this instance started that is still tracked."""
+        for name in list(self._containers):
+            _force_remove_container(name)
+            self._containers.discard(name)
+            _ACTIVE_CONTAINERS.discard(name)
+
+    def __enter__(self) -> "DockerSandbox":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.cleanup()
+        return False  # never swallow the exception
+
+    @classmethod
+    def sweep_orphaned_containers(cls) -> list[str]:
+        """
+        Remove every container this project has ever labelled, and return the
+        ids removed.
+
+        For the case nothing in-process can cover: the agent killed with
+        SIGKILL, or the machine losing power. Deliberately *not* automatic on
+        startup -- a sweep cannot tell a leaked container from one belonging to
+        another agent running right now, so it is the caller's decision.
+        """
+        if shutil.which("docker") is None:
+            return []
+        try:
+            listed = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", f"label={CONTAINER_LABEL_KEY}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            _LOG.debug("could not list sandbox containers: %s", exc)
+            return []
+
+        ids = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+        return [cid for cid in ids if _force_remove_container(cid)]
