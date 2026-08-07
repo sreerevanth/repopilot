@@ -103,13 +103,6 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ---
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for an architecture walkthrough, how to
-run the pipeline locally without an API key, and the project's conventions.
-
----
-
 ## Usage
 
 ### Basic — fix failing tests
@@ -154,7 +147,7 @@ python demo_run.py /path/to/sample_repo
 ```
 --repo          Path to git repository (required)
 --task          Task description (required)
---runner        Test runner: pytest|npm_test|vitest|jest|go|cargo|... (default: pytest)
+--runner        Test runner: pytest|npm_test|go|cargo|... (default: pytest)
 --runner-args   Extra args for runner
 --run-file      Run a specific file instead of test suite
 --timeout       Sandbox timeout in seconds (default: 120)
@@ -167,47 +160,7 @@ python demo_run.py /path/to/sample_repo
 --log-dir       Log output dir (default: logs/)
 --backup-dir    Backup dir (default: backups/)
 --quiet         Suppress verbose output
---yes, -y       Auto-approve changes (bypasses every prompt; implied by CI=true)
---interactive   After tests pass, print the diff and confirm before committing
 ```
-
-### Reviewing before a commit
-
-By default the agent commits as soon as the suite goes green. `--interactive`
-inserts a review gate at that point — it prints the working-tree diff the agent
-produced and asks:
-
-```
-Commit these 3 change(s)? [Y/n]:
-```
-
-Declining leaves the changes on disk, uncommitted and unpushed, so they can be
-inspected and committed by hand — or discarded with `--rollback`. The run exits
-with outcome `aborted`.
-
-This is distinct from the existing prompt, which fires _before_ files are
-written and shows a manifest of paths rather than a diff. `--yes` (and `CI=true`,
-which sets it automatically) bypasses both, so unattended runs never block on
-stdin.
-
----
-
-## Task Sources
-
-`--task` normally carries a description. It can instead carry a GitHub issue
-URL, in which case the title, body and comments are fetched and composed into
-the task the agent works from:
-
-```bash
-python main.py --repo . --task https://github.com/sreerevanth/repopilot/issues/75
-```
-
-Public repositories work unauthenticated; `GITHUB_TOKEN` raises the rate limit
-and is required for private ones. Long bodies and threads are trimmed so the
-issue text does not crowd source files out of the context budget.
-
-If the URL cannot be resolved the run stops with an explanation. Passing it
-through as a literal task would send the agent off to implement a URL.
 
 ---
 
@@ -216,58 +169,22 @@ through as a literal task would send the agent off to implement a URL.
 ### Module 1 — `repo_ingestion.py`
 
 - Recursively walks a directory, skipping `.git`, `node_modules`, `__pycache__`, etc.
-- Respects the repository's `.gitignore` and `.git/info/exclude` via `pathspec`,
-  so build output, caches and anything else the project already ignores stays
-  out of the context budget.
-- Never ingests credential-bearing filenames (`.env*`, `*.pem`, `*.key`,
-  `id_rsa`, `.npmrc`, `.netrc`, `credentials*`, …). Ingested content is sent
-  verbatim to the model, so this holds even when the project has no
-  `.gitignore`.
 - Ignores binary files, files > 512KB, and enforces an 8MB total repo budget.
 - Returns a `Repository` with `FileRecord[]` — path, content, language, checksum.
-
-> Only root-level ignore files are read; nested `.gitignore` files are not
-> resolved. If `pathspec` is not installed the walker degrades to the built-in
-> `IGNORE_DIRS`/`IGNORE_EXTENSIONS` rules — the secret-filename filter is
-> independent of it and always applies.
 
 ### Module 2 — `context_builder.py`
 
 - Scores every file against the task using: language priority, path keyword match,
   content keyword frequency, entry-point bonus, import graph hints.
 - Fills a configurable character budget (~60K chars / ~15K tokens).
-- A Python file too large to include whole is reduced to a signature-only
-  outline — imports, constants, class fields and `def` lines with their
-  annotations, bodies omitted — instead of being dropped. That costs roughly a
-  seventh of the space, so the model still learns the module exists and what it
-  exposes. Outlined files are flagged in `BuiltContext.outlined` and carry an
-  `# OUTLINE ONLY` header. Non-Python files are not outlined; that would need
-  tree-sitter.
 - Returns `BuiltContext.render()` — XML-tagged source ready for the LLM prompt.
 
 ### Module 3 — `llm_client.py`
 
 - Wraps the Anthropic API with structured JSON I/O.
-- Prompts live in `prompts/*.txt` (`system`, `initial`, `retry`) so they can be
-  edited and diffed without touching Python. Point `REPOPILOT_PROMPT_DIR` at
-  another directory to try an alternative set. A missing, empty or unreadable
-  file falls back to the built-in text, so a bad checkout degrades to the
-  previous behaviour rather than leaving the agent with no prompt.
 - System prompt enforces a machine-parseable output schema.
 - `initial_request()` for first pass; `retry_request()` for error-fed retries.
 - Parses `FileChange[]` from JSON; gracefully handles malformed output.
-
-#### Streaming
-
-Responses stream by default, so a 20-30 second call shows progress instead of
-sitting silent. Only a character count is echoed, and only to a tty — the
-response is one JSON object whose largest field is complete file contents, so
-printing the deltas verbatim would dump the rewritten source into the terminal.
-
-The text is reassembled and parsed as a single object at the end. Deltas split
-wherever the API decides, including mid-token, so incremental parsing would be
-fragile for no real gain. `LLMClient(stream=False)` restores the blocking call,
-and an SDK without `messages.stream()` falls back to it automatically.
 
 ### Module 4 — `code_modifier.py`
 
@@ -275,6 +192,17 @@ and an SDK without `messages.stream()` falls back to it automatically.
 - Backs up every file before modification.
 - Supports `modify`, `create`, `delete` actions.
 - `rollback()` restores all backups on failure.
+
+#### Logging
+
+Modules log through `logging` under the `agent.*` namespace, so their output is
+routed by whatever `AgentLogger` configures — it reaches the run log, and
+`--quiet` applies to it.
+
+`print()` remains where the output _is_ the interface rather than a diagnostic:
+the change manifest and confirmation prompt in `dry_run.py`, and the banner,
+summary and error messages in `main.py`. A log level should never be able to
+hide the thing a user is being asked to approve.
 
 ### Module 5 — `sandbox.py`
 
@@ -286,23 +214,6 @@ and an SDK without `messages.stream()` falls back to it automatically.
 ### Module 6 — `agent_loop.py` (CORE)
 
 - `AutonomousAgent.run()` orchestrates all modules.
-
-#### Linting before tests
-
-`--lint ruff` (or `flake8`, `pyflakes`, `eslint`, `tsc`, `govet`, `clippy`) runs
-a linter before the suite. A failure short-circuits the iteration and feeds the
-lint output back to the model, so a syntax error or an undefined name is
-corrected in under a second instead of arriving as a pytest collection error.
-
-The Python linters select error-class rules only (`E9,F`). A default rule set
-fails on style the model did not write — ruff's `I001` flags unsorted imports in
-otherwise valid code — which would make the gate fail every iteration regardless
-of what the model produced. Widen it per project with `--lint-args`.
-
-```bash
-python main.py --repo . --task "Fix the parser" --lint ruff
-```
-
 - Iterates up to `max_iterations` times.
 - On success: commits (optionally pushes + opens PR).
 - On failure: rolls back all file changes.
@@ -313,31 +224,6 @@ python main.py --repo . --task "Fix the parser" --lint ruff
 - Wraps `git` subprocess calls: `create_branch`, `stage_files`, `commit`, `push`.
 - GitHub PR creation via REST API (no extra dependencies — uses `urllib`).
 - `rollback` is handled by `code_modifier.py`; git ops are only for success path.
-- `create_branch` refuses to reuse an existing branch that does not already
-  contain the base branch, rather than checking it out and running the agent
-  against a stale tree.
-- A push rejected because the remote branch moved is retried once after
-  `git rebase`. A rebase that conflicts is aborted, leaving the working tree
-  untouched — an unattended agent cannot resolve conflicts, and a repository
-  left mid-rebase is worse than a failed push. Pass `retry_with_rebase=False`
-  to skip it. Other push failures (missing remote, auth, network, protected
-  branch) are classified and get a specific remedy appended to the error.
-
-### Module 9 — `notify.py`
-
-- Posts the run outcome to a webhook when `WEBHOOK_URL` is set. A six-iteration
-  run takes ten minutes or more, so people walk away from the terminal.
-- Detects Slack and Discord from the URL and uses each one's payload key; any
-  other endpoint receives the structured fields as JSON.
-- Cannot fail a run. A broken URL, unreachable host or rejected request is
-  reported through the log and the return value, never raised — the agent's
-  work is already finished by the time this fires.
-- Only `http`/`https` URLs are sent. Uses `urllib`, so no new dependency.
-
-```bash
-export WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/xxxx
-python main.py --repo . --task "Fix the failing parser test"
-```
 
 ### Module 8 — `logger.py`
 
@@ -345,25 +231,14 @@ python main.py --repo . --task "Fix the failing parser test"
 - Human-readable log at `<run_id>_human.log`.
 - Final `<run_id>_summary.json` with full run record.
 
----
+Modules log through `logging` under the `agent.*` namespace, so their output is
+routed by whatever `AgentLogger` configures — it reaches the run log, and
+`--quiet` applies to it.
 
-### `dashboard.py` — run viewer
-
-Renders a run log as a readable timeline — the model's analysis, its file
-changes, and the test output for each iteration:
-
-```bash
-python -m modules.dashboard logs/agent_20260807_abc.jsonl
-python -m modules.dashboard logs/agent_20260807_abc.jsonl --follow
-```
-
-`--follow` tails the log while a run is in progress, so a long run is visible as
-it happens rather than scrolling past in CLI output.
-
-It reads the JSONL `logger.py` already writes rather than being instrumented
-into the loop. That keeps it decoupled: it works on a finished run, on a run in
-another terminal, and needs no changes to `agent_loop.py`. It also means no web
-server and no new dependency. Colour is disabled off a tty and by `NO_COLOR`.
+`print()` remains where the output _is_ the interface rather than a diagnostic:
+the change manifest and confirmation prompt in `dry_run.py`, and the banner,
+summary and error messages in `main.py`. A log level should never be able to
+hide the thing a user is being asked to approve.
 
 ---
 
@@ -413,29 +288,6 @@ return MAX_RETRIES
 | Test runner not found        | `pytest` not installed              | `sandbox.py` checks `shutil.which()`; returns exit_code 127    |
 | All apply ops fail           | Wrong paths, permission error       | Agent breaks loop, returns `error` outcome                     |
 | Push auth failure            | Missing SSH key / token             | Logged as non-fatal; outcome still `success` locally           |
-| Ctrl+C mid-apply             | User interrupts during file writes  | `run()` catches the interrupt and rolls back applied files     |
-
----
-
-### Knowing whether a run was isolated
-
-`DockerSandbox` falls back to `SubprocessSandbox` when Docker is unavailable,
-which means `--network=none`, the 512MB memory cap and the 1-CPU limit **do not
-apply to that run**. The fallback logs a warning when it happens, and every
-`ExecutionResult` records which executor produced it — `docker` (with
-`result.isolated` set), `subprocess`, or `subprocess-fallback` for the case
-where isolation was asked for and quietly not delivered.
-
-Pass `strict=True` to make that a hard failure instead:
-
-```python
-DockerSandbox(repo, strict=True).run_tests("pytest")
-# raises SandboxUnavailableError rather than running unisolated
-```
-
-"Unavailable" means either no `docker` on PATH or no daemon answering — an
-installed-but-not-running Docker Desktop is the common case, and it leaves the
-binary on PATH.
 
 ---
 
@@ -447,15 +299,6 @@ binary on PATH.
 # In sandbox.py, add to ALLOWED_RUNNERS:
 "deno": ["deno", "test"],
 ```
-
-**JavaScript / TypeScript runners:** `vitest` and `jest` go through
-`npx --no-install`, which resolves the target project's own `node_modules/.bin`
-and fails if the package is missing rather than fetching it from the registry —
-so the sandbox stays hermetic and `DockerSandbox`'s `--network=none` is not
-quietly bypassed. Install the runner as a dev dependency of the repo under test
-first. `vitest` is invoked as `vitest run`: bare `vitest` starts a watch server
-when it believes it is interactive, which under the sandbox would sit until
-`timeout_seconds` elapsed and be reported as a test timeout.
 
 **Add a new file type to context scoring:**
 

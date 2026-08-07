@@ -16,7 +16,7 @@ Flow per iteration:
 import os
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -39,15 +39,12 @@ class AgentConfig:
     task: str
     dry_run: bool = False
     yes: bool = False
-    interactive: bool = False   # pause for review after tests pass, before commit
 
     # Execution
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
     run_file: Optional[str] = None         # run a specific file instead of tests
     run_file_runner: str = "python"
-    lint_runner: Optional[str] = None      # run a linter before the test suite
-    lint_args: list[str] = field(default_factory=list)
     timeout_seconds: int = 120
 
     # Loop control
@@ -77,7 +74,7 @@ class AgentConfig:
 @dataclass
 class AgentRunResult:
     run_id: str
-    outcome: str        # success | failed | max_retries | error | aborted | dry_run
+    outcome: str        # success | failed | max_retries | error
     branch_name: Optional[str]
     pr_url: Optional[str]
     iterations_used: int
@@ -93,11 +90,6 @@ class AutonomousAgent:
         self.config = config
         self.run_id = f"{config.git_branch_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         self.branch_name: Optional[str] = None
-        self.pr_url: Optional[str] = None
-
-        # Mirrors the loop's local `last_apply_results`. run() needs it to roll
-        # back after a KeyboardInterrupt, which unwinds past the local.
-        self._applied: list = []
 
         # Resolve paths
         cfg = self.config
@@ -130,49 +122,6 @@ class AutonomousAgent:
         else:
             return self.sandbox.run_tests(cfg.test_runner, cfg.test_args)
 
-    # Cap the review diff so a large refactor cannot flood the terminal.
-    _MAX_DIFF_LINES = 400
-
-    def _confirm_commit(self, changed_paths: list[str]) -> bool:
-        """
-        Show what the agent wrote and ask before committing.
-
-        Only runs under --interactive. --yes bypasses it (and main.py sets that
-        automatically when CI=true), matching how the pre-apply prompt behaves,
-        so unattended runs are never left waiting on stdin.
-        """
-        cfg = self.config
-        if not cfg.interactive or cfg.yes:
-            return True
-
-        from modules.dry_run import ask_confirmation
-
-        print("\n" + "=" * 60)
-        print("  TESTS PASSED - REVIEW BEFORE COMMIT")
-        print("=" * 60)
-
-        diff = self.git.diff_unstaged() if self.git else ""
-        if diff.strip():
-            lines = diff.splitlines()
-            for line in lines[: self._MAX_DIFF_LINES]:
-                print(line)
-            if len(lines) > self._MAX_DIFF_LINES:
-                print(
-                    f"\n  ... diff truncated at {self._MAX_DIFF_LINES} lines "
-                    f"({len(lines) - self._MAX_DIFF_LINES} more). "
-                    f"Run `git diff` in another shell for the full text."
-                )
-        else:
-            # No git, or git reported nothing. Fall back to the file list so the
-            # prompt is never shown without context.
-            reason = "Git is disabled" if not self.git else "Git reported no diff"
-            print(f"  {reason}. Files the agent changed:")
-            for path in changed_paths:
-                print(f"    {path}")
-
-        print("=" * 60)
-        return ask_confirmation(len(changed_paths), action="Commit")
-
     def _commit_changes(self, iteration: int, changed_paths: list[str]) -> bool:
         """Stage and commit the modified files."""
         if not self.git:
@@ -199,56 +148,6 @@ class AutonomousAgent:
         return commit.success
 
     def run(self) -> AgentRunResult:
-        """
-        Execute the agent loop, rolling back applied files if interrupted.
-
-        Ctrl+C during `apply_changes` used to unwind straight out of the loop,
-        past the rollback at the end of `_run`, leaving half-written files in
-        the working tree. The body is delegated so the interrupt can be caught
-        here and the same rollback applied.
-        """
-        try:
-            return self._run()
-        except KeyboardInterrupt:
-            return self._handle_interrupt()
-
-    def _handle_interrupt(self) -> AgentRunResult:
-        """Restore backed-up files after Ctrl+C and report an aborted run."""
-        self.logger.warning("\n  Interrupted. Rolling back applied changes...")
-
-        restored: list[str] = []
-        if self._applied:
-            try:
-                restored = self.modifier.rollback(self._applied)
-                self.logger.info(f"  Restored {len(restored)} file(s): {restored}")
-            except Exception as exc:
-                # Report rather than mask the interrupt with a second failure.
-                self.logger.error(f"  Rollback failed after interrupt: {exc}")
-        else:
-            self.logger.info("  No files had been modified yet; nothing to restore.")
-
-        self._applied = []
-
-        try:
-            self.logger.finish_run("aborted", self.branch_name, None)
-        except Exception:  # pragma: no cover - logging must not mask the abort
-            pass
-
-        return AgentRunResult(
-            run_id=self.run_id,
-            outcome="aborted",
-            branch_name=self.branch_name,
-            pr_url=None,
-            iterations_used=0,
-            final_message=(
-                f"Interrupted by user. Rolled back {len(restored)} file(s); "
-                f"the working tree is back to its pre-run state."
-                if restored else
-                "Interrupted by user. No file changes needed rolling back."
-            ),
-        )
-
-    def _run(self) -> AgentRunResult:
         cfg = self.config
         self.logger.start_run(cfg.task, cfg.repo_root)
 
@@ -265,7 +164,7 @@ class AutonomousAgent:
         last_changes: list[FileChange] = []
         last_apply_results: list[ApplyResult] = []
         outcome = "failed"
-        self.pr_url = None
+        pr_url: Optional[str] = None
         iterations_used = 0
 
         for iteration in range(1, cfg.max_iterations + 1):
@@ -387,8 +286,8 @@ class AutonomousAgent:
 
                 if self.config.dry_run:
                     manifest_path = save_manifest(changes_list, self.config.log_dir, self.run_id)
-                    print(f"\n[DRY RUN] No files were modified.")
-                    print(f"[DRY RUN] Manifest saved to: {manifest_path}")
+                    self.logger.info("[DRY RUN] No files were modified.")
+                    self.logger.info(f"[DRY RUN] Manifest saved to: {manifest_path}")
                     return AgentRunResult(
                         outcome="dry_run",
                         run_id=self.run_id,
@@ -413,7 +312,6 @@ class AutonomousAgent:
                 self.logger.log_apply_results(apply_results)
                 last_changes = valid_changes
                 last_apply_results = apply_results
-                self._applied = apply_results
 
                 iter_record.apply_results = [
                     {"path": r.path, "action": r.action, "success": r.success, "error": r.error}
@@ -430,47 +328,17 @@ class AutonomousAgent:
                 self.logger.info("  No file changes from LLM this iteration.")
                 last_changes = []
                 last_apply_results = []
-                self._applied = []
 
             # ── Early exit if LLM says done (optional) ──
             if cfg.success_on_llm_done and llm_resp.done and llm_resp.confidence >= 0.8:
                 self.logger.info("  LLM reports task complete. Skipping execution (success_on_llm_done=True).")
-                changed_paths = [c.path for c in last_changes]
-                if not self._confirm_commit(changed_paths):
-                    self.logger.warning(
-                        "  Commit declined. Changes are left in the working tree."
-                    )
-                    outcome = "aborted"
-                    self.logger.record_iteration(iter_record)
-                    break
-
-                self._commit_changes(iteration, changed_paths)
+                self._commit_changes(iteration, [c.path for c in last_changes])
                 outcome = "success"
                 iter_record.execution_success = True
                 self.logger.record_iteration(iter_record)
                 break
 
             # ── Step 5: Execute ──
-            # Lint first when configured. A syntax error surfaces in under a
-            # second with a precise location, instead of arriving as a pytest
-            # collection error several seconds later.
-            if cfg.lint_runner:
-                lint_result = self.sandbox.run_lint(cfg.lint_runner, cfg.lint_args)
-                self.logger.log_execution(lint_result)
-                if not lint_result.success:
-                    self.logger.warning(
-                        f"  Lint failed ({cfg.lint_runner}); "
-                        f"skipping tests and retrying with the lint output."
-                    )
-                    last_exec = lint_result
-                    iter_record.execution_command = lint_result.command
-                    iter_record.execution_exit_code = lint_result.exit_code
-                    iter_record.execution_stdout = lint_result.stdout[:2000]
-                    iter_record.execution_stderr = lint_result.stderr[:2000]
-                    iter_record.execution_success = False
-                    self.logger.record_iteration(iter_record)
-                    continue
-
             exec_result = self._run_execution()
             self.logger.log_execution(exec_result)
             last_exec = exec_result
@@ -487,16 +355,7 @@ class AutonomousAgent:
             # ── Step 6: Success check ──
             if exec_result.success:
                 self.logger.info(f"  Tests passed on iteration {iteration}")
-
-                changed_paths = [c.path for c in last_changes]
-                if not self._confirm_commit(changed_paths):
-                    self.logger.warning(
-                        "  Commit declined. Changes are left in the working tree."
-                    )
-                    outcome = "aborted"
-                    break
-
-                self._commit_changes(iteration, changed_paths)
+                self._commit_changes(iteration, [c.path for c in last_changes])
                 outcome = "success"
                 break
 
@@ -522,7 +381,7 @@ class AutonomousAgent:
 
                 if push_result.success and cfg.git_create_pr:
                     diff_stat = self.git.diff_staged() or "See commit for changes."
-                    self.pr_url = self.git.create_github_pr(
+                    pr_url = self.git.create_github_pr(
                         title=f"[Agent] {cfg.task[:72]}",
                         body=(
                             f"## Autonomous Agent PR\n\n"
@@ -533,8 +392,8 @@ class AutonomousAgent:
                         head_branch=self.branch_name,
                         base_branch=cfg.git_base_branch,
                     )
-                    if self.pr_url:
-                        self.logger.info(f"  PR created: {self.pr_url}")
+                    if pr_url:
+                        self.logger.info(f"  PR created: {pr_url}")
 
         # ── Rollback on failure if rollback_on_failure ──
         if outcome in ("failed", "max_retries", "error") and last_apply_results:
@@ -547,20 +406,15 @@ class AutonomousAgent:
             "failed": "Task could not be completed. Check logs.",
             "max_retries": f"Exhausted {cfg.max_iterations} iterations without passing tests.",
             "error": "Agent encountered an unrecoverable error.",
-            "aborted": (
-                "Commit declined at the review prompt. Tests passed and the "
-                "changes are still in the working tree - commit them manually, "
-                "or run with --rollback to discard them."
-            ),
         }.get(outcome, "Unknown outcome")
 
-        self.logger.finish_run(outcome, self.branch_name, self.pr_url)
+        self.logger.finish_run(outcome, self.branch_name, pr_url)
 
         return AgentRunResult(
             run_id=self.run_id,
             outcome=outcome,
             branch_name=self.branch_name,
-            pr_url=self.pr_url,
+            pr_url=pr_url,
             iterations_used=iterations_used,
             final_message=final_message,
         )
