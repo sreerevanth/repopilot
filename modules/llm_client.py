@@ -1,15 +1,17 @@
 """
 Module 3: LLM Interaction Layer
 Clean prompt engineering, structured I/O, token budget handling,
-iterative refinement support. Uses Anthropic Claude API.
+iterative refinement support. Supports Anthropic, OpenAI, Gemini, and Ollama.
 """
 
 import json
 import os
 import re
 import time
+import urllib.request
+import ssl
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 
 try:
     import anthropic
@@ -19,6 +21,16 @@ except ImportError:
 
 MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
+
+# Price per million tokens (input_price, output_price)
+MODEL_PRICING = {
+    "claude-sonnet-4-20250514": (3.00, 15.00),
+    "claude-3-5-sonnet-20241022": (3.00, 15.00),
+    "gpt-4o": (5.00, 15.00),
+    "gemini-1.5-pro": (1.25, 5.00),
+    "ollama": (0.00, 0.00),
+}
+
 
 # ─────────────────────────────────────────────
 # Prompt Templates
@@ -40,8 +52,8 @@ Return a JSON object with this exact schema:
   "changes": [
     {
       "path": "<relative file path from repo root>",
-      "action": "modify" | "create" | "delete",
-      "content": "<full new file content (for modify/create)>",
+      "action": "modify" | "create" | "delete" | "patch",
+      "content": "<full new file content (for modify/create) or unified diff patch (for patch)>",
       "explanation": "<why this change>"
     }
   ],
@@ -51,6 +63,7 @@ Return a JSON object with this exact schema:
 
 RULES:
 - For "modify" and "create": always provide the COMPLETE file content, not diffs or snippets.
+- For "patch": content should be a valid unified diff format.
 - For "delete": omit "content".
 - Do NOT include markdown fences, explanation text, or anything outside the JSON object.
 - Paths must be relative (e.g., "src/utils.py"), never absolute.
@@ -103,8 +116,8 @@ Focus on the root cause of the failure. Return ONLY the JSON object.
 @dataclass
 class FileChange:
     path: str
-    action: str      # "modify" | "create" | "delete"
-    content: str     # full file content
+    action: str      # "modify" | "create" | "delete" | "patch"
+    content: str     # full file content or unified diff
     explanation: str
 
 
@@ -116,56 +129,55 @@ class LLMResponse:
     confidence: float
     done: bool
     parse_error: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost: float = 0.0
 
 
 # ─────────────────────────────────────────────
-# Client
+# Clients
 # ─────────────────────────────────────────────
 
-class LLMClient:
-    def __init__(self, api_key: Optional[str] = None):
-        if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            )
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
-        self.client = anthropic.Anthropic(api_key=key)
+class BaseLLMClient:
+    def __init__(self, model: str = MODEL):
+        self.model = model
+        self.input_tokens_used = 0
+        self.output_tokens_used = 0
+        self.total_cost = 0.0
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
-        """Raw API call with retry on transient errors."""
-        for attempt in range(retries):
-            try:
-                response = self.client.messages.create(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.content[0].text
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise
-                wait = 2 ** attempt
-                time.sleep(wait)
-        raise RuntimeError("LLM call failed after retries")
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate tokens using a rough 4 character per token rule."""
+        return len(text) // 4
 
-    def _parse_response(self, raw: str) -> LLMResponse:
+    def _calculate_cost(self, input_tok: int, output_tok: int) -> float:
+        pricing = MODEL_PRICING.get(self.model, (0.0, 0.0))
+        cost = (input_tok / 1_000_000 * pricing[0]) + (output_tok / 1_000_000 * pricing[1])
+        return cost
+
+    def _call(self, prompt: str) -> str:
+        raise NotImplementedError("Subclasses must implement _call")
+
+    def _parse_response(self, raw: str, input_tok: int) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
-        # Strip any accidental markdown fences
         text = raw.strip()
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
         text = re.sub(r"```\s*$", "", text, flags=re.MULTILINE)
         text = text.strip()
 
-        # Find the outermost JSON object
         start = text.find("{")
         end = text.rfind("}") + 1
+        
+        output_tok = self._estimate_tokens(raw)
+        cost = self._calculate_cost(input_tok, output_tok)
+        self.input_tokens_used += input_tok
+        self.output_tokens_used += output_tok
+        self.total_cost += cost
+
         if start == -1 or end == 0:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"No JSON object found in response: {raw[:300]}"
+                parse_error=f"No JSON object found in response: {raw[:300]}",
+                input_tokens=input_tok, output_tokens=output_tok, estimated_cost=cost
             )
 
         try:
@@ -173,7 +185,8 @@ class LLMClient:
         except json.JSONDecodeError as e:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}"
+                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}",
+                input_tokens=input_tok, output_tokens=output_tok, estimated_cost=cost
             )
 
         changes = []
@@ -191,13 +204,16 @@ class LLMClient:
             changes=changes,
             confidence=float(data.get("confidence", 0.5)),
             done=bool(data.get("done", False)),
+            input_tokens=input_tok,
+            output_tokens=output_tok,
+            estimated_cost=cost
         )
 
     def initial_request(self, task: str, context_str: str) -> LLMResponse:
-        """First-pass: analyze task and produce code changes."""
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
+        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
         raw = self._call(prompt)
-        return self._parse_response(raw)
+        return self._parse_response(raw, input_tok)
 
     def retry_request(
         self,
@@ -208,7 +224,6 @@ class LLMClient:
         stderr: str,
         exit_code: int,
     ) -> LLMResponse:
-        """Retry after a failed execution — feed error output back."""
         prev_summary = "\n".join(
             f"  - [{c.action}] {c.path}: {c.explanation}"
             for c in previous_changes
@@ -222,5 +237,212 @@ class LLMClient:
             stderr=stderr[:4000] if stderr else "(empty)",
             context=context_str,
         )
+        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
         raw = self._call(prompt)
-        return self._parse_response(raw)
+        return self._parse_response(raw, input_tok)
+
+
+class AnthropicClient(BaseLLMClient):
+    def __init__(self, api_key: Optional[str] = None, model: str = MODEL):
+        super().__init__(model)
+        if not _ANTHROPIC_AVAILABLE:
+            raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        self.client = anthropic.Anthropic(api_key=key)
+
+    def _call(self, prompt: str) -> str:
+        # Stream output in console for Issue #23
+        print("  [Streaming LLM Response]: ", end="", flush=True)
+        response_chunks = []
+        try:
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=MAX_TOKENS,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            ) as stream:
+                for text in stream.text_stream:
+                    print(text, end="", flush=True)
+                    response_chunks.append(text)
+            print("\n")
+            return "".join(response_chunks)
+        except Exception:
+            # Fallback to standard non-stream call on error
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=MAX_TOKENS,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            print(response.content[0].text)
+            print("\n")
+            return response.content[0].text
+
+
+class OpenAIClient(BaseLLMClient):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
+        super().__init__(model)
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY not set")
+
+    def _call(self, prompt: str) -> str:
+        print("  [Streaming LLM Response (OpenAI)]: ", end="", flush=True)
+        # Using zero-dependency urllib implementation
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": MAX_TOKENS,
+            "temperature": 0.2
+        }
+        
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            with urllib.request.urlopen(req, context=ctx) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                text = res["choices"][0]["message"]["content"]
+                print(text)
+                print("\n")
+                return text
+        except Exception as e:
+            print(f"Error calling OpenAI API: {e}")
+            raise
+
+
+class GeminiClient(BaseLLMClient):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-1.5-pro"):
+        super().__init__(model)
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY not set")
+
+    def _call(self, prompt: str) -> str:
+        print("  [Streaming LLM Response (Gemini)]: ", end="", flush=True)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        headers = {
+            "Content-Type": "application/json"
+        }
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": SYSTEM_PROMPT + "\n\n" + prompt}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": MAX_TOKENS,
+                "temperature": 0.2
+            }
+        }
+
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            with urllib.request.urlopen(req, context=ctx) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                text = res["candidates"][0]["content"]["parts"][0]["text"]
+                print(text)
+                print("\n")
+                return text
+        except Exception as e:
+            print(f"Error calling Gemini API: {e}")
+            raise
+
+
+class OllamaClient(BaseLLMClient):
+    def __init__(self, model: str = "llama3"):
+        super().__init__(model)
+
+    def _call(self, prompt: str) -> str:
+        print("  [Streaming LLM Response (Ollama)]: ", end="", flush=True)
+        url = "http://localhost:11434/api/chat"
+        headers = {
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            "options": {
+                "temperature": 0.2
+            },
+            "stream": False
+        }
+
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            with urllib.request.urlopen(req, context=ctx) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                text = res["message"]["content"]
+                print(text)
+                print("\n")
+                return text
+        except Exception as e:
+            print(f"Error calling Ollama API (is Ollama server running on localhost:11434?): {e}")
+            raise
+
+
+class LLMClient(BaseLLMClient):
+    """Facade class maintaining backward compatibility while wrapping dynamic clients."""
+    
+    def __init__(self, api_key: Optional[str] = None, model: str = MODEL, provider: str = "anthropic"):
+        super().__init__(model)
+        self.provider = provider.lower()
+        if self.provider == "openai":
+            self.underlying_client = OpenAIClient(api_key, model)
+        elif self.provider == "gemini":
+            self.underlying_client = GeminiClient(api_key, model)
+        elif self.provider == "ollama":
+            self.underlying_client = OllamaClient(model)
+        else:
+            self.underlying_client = AnthropicClient(api_key, model)
+
+    def _call(self, prompt: str) -> str:
+        return self.underlying_client._call(prompt)
+
+    def initial_request(self, task: str, context_str: str) -> LLMResponse:
+        res = self.underlying_client.initial_request(task, context_str)
+        self.input_tokens_used = self.underlying_client.input_tokens_used
+        self.output_tokens_used = self.underlying_client.output_tokens_used
+        self.total_cost = self.underlying_client.total_cost
+        return res
+
+    def retry_request(
+        self,
+        task: str,
+        context_str: str,
+        previous_changes: list[FileChange],
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+    ) -> LLMResponse:
+        res = self.underlying_client.retry_request(task, context_str, previous_changes, stdout, stderr, exit_code)
+        self.input_tokens_used = self.underlying_client.input_tokens_used
+        self.output_tokens_used = self.underlying_client.output_tokens_used
+        self.total_cost = self.underlying_client.total_cost
+        return res
+
