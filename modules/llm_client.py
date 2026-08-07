@@ -20,6 +20,56 @@ except ImportError:
 MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
 
+# USD per million tokens. Published rates, kept in one place so a price change
+# is a one-line edit rather than a hunt. An unknown model falls back to the
+# default rather than silently costing nothing -- a budget that reports $0.00
+# for an unrecognised model is worse than no budget at all.
+PRICING_PER_MTOK = {
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+    "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00},
+}
+DEFAULT_PRICING = {"input": 3.00, "output": 15.00}
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised when the accumulated spend has reached --max-cost."""
+
+
+@dataclass
+class UsageTracker:
+    """Running token and cost total for one client."""
+
+    model: str = MODEL
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def pricing(self) -> dict:
+        return PRICING_PER_MTOK.get(self.model, DEFAULT_PRICING)
+
+    @property
+    def cost_usd(self) -> float:
+        rates = self.pricing
+        return (
+            self.input_tokens * rates["input"]
+            + self.output_tokens * rates["output"]
+        ) / 1_000_000
+
+    def record(self, response) -> None:
+        """Add one API response. Tolerates a client that reports no usage."""
+        usage = getattr(response, "usage", None)
+        self.calls += 1
+        self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+        self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+
+    def summary(self) -> str:
+        return (
+            f"{self.calls} call(s), {self.input_tokens:,} in / "
+            f"{self.output_tokens:,} out tokens, ${self.cost_usd:.4f}"
+        )
+
 # ─────────────────────────────────────────────
 # Prompt Templates
 # ─────────────────────────────────────────────
@@ -123,7 +173,12 @@ class LLMResponse:
 # ─────────────────────────────────────────────
 
 class LLMClient:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        max_cost_usd: Optional[float] = None,
+        model: str = MODEL,
+    ):
         if not _ANTHROPIC_AVAILABLE:
             raise RuntimeError(
                 "anthropic package not installed. Run: pip install anthropic"
@@ -132,17 +187,40 @@ class LLMClient:
         if not key:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.client = anthropic.Anthropic(api_key=key)
+        self.model = model
+        self.max_cost_usd = max_cost_usd
+        self.usage = UsageTracker(model=model)
+
+    def _check_budget(self) -> None:
+        """
+        Stop before the next call once the limit is reached.
+
+        The cost of a call is only known after it returns, so this is a stop
+        condition rather than a pre-authorisation: spend can overshoot the limit
+        by at most one call. Set the limit slightly below what you can actually
+        afford.
+        """
+        if self.max_cost_usd is None:
+            return
+        if self.usage.cost_usd >= self.max_cost_usd:
+            raise BudgetExceededError(
+                f"Cost limit reached: spent ${self.usage.cost_usd:.4f} of "
+                f"${self.max_cost_usd:.2f} after {self.usage.summary()}. "
+                f"Stopping before the next call."
+            )
 
     def _call(self, prompt: str, retries: int = 3) -> str:
         """Raw API call with retry on transient errors."""
+        self._check_budget()
         for attempt in range(retries):
             try:
                 response = self.client.messages.create(
-                    model=MODEL,
+                    model=self.model,
                     max_tokens=MAX_TOKENS,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
                 )
+                self.usage.record(response)
                 return response.content[0].text
             except Exception as e:
                 if attempt == retries - 1:

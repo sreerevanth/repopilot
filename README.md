@@ -185,6 +185,13 @@ python demo_run.py /path/to/sample_repo
 - System prompt enforces a machine-parseable output schema.
 - `initial_request()` for first pass; `retry_request()` for error-fed retries.
 - Parses `FileChange[]` from JSON; gracefully handles malformed output.
+- Accumulates token usage per call and prices it from a table of published
+  per-model rates. `--max-cost 1.00` stops before the next call once that much
+  has been spent, so a runaway retry loop halts instead of billing indefinitely.
+- The limit is a stop condition rather than a pre-authorisation: a call's cost
+  is only known once it returns, so spend can exceed the limit by at most one
+  call. An unrecognised model falls back to default pricing rather than
+  reporting $0.00 — a budget that silently costs nothing is worse than none.
 
 ### Module 4 — `code_modifier.py`
 

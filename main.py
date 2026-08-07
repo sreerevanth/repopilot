@@ -92,6 +92,9 @@ Examples:
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
     # Non-interactive / CI
+    parser.add_argument("--max-cost", type=float, default=None, metavar="USD",
+                        help="Stop before the next LLM call once this much has been "
+                             "spent (e.g. --max-cost 1.00). Off by default.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
 
@@ -164,6 +167,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        max_cost_usd=args.max_cost,
     )
 
     try:

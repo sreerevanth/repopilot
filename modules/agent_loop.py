@@ -22,7 +22,12 @@ from typing import Optional
 
 from modules.repo_ingestion import ingest_repository, Repository
 from modules.context_builder import build_context
-from modules.llm_client import LLMClient, LLMResponse, FileChange
+from modules.llm_client import (
+    BudgetExceededError,
+    FileChange,
+    LLMClient,
+    LLMResponse,
+)
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
@@ -66,6 +71,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    max_cost_usd: Optional[float] = None
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -74,7 +80,7 @@ class AgentConfig:
 @dataclass
 class AgentRunResult:
     run_id: str
-    outcome: str        # success | failed | max_retries | error
+    outcome: str        # success | failed | max_retries | error | budget_exceeded
     branch_name: Optional[str]
     pr_url: Optional[str]
     iterations_used: int
@@ -98,7 +104,9 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(api_key=cfg.anthropic_api_key)
+        self.llm = LLMClient(
+            api_key=cfg.anthropic_api_key, max_cost_usd=cfg.max_cost_usd
+        )
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 
@@ -204,6 +212,12 @@ class AutonomousAgent:
                         stderr=last_exec.stderr,
                         exit_code=last_exec.exit_code,
                     )
+            except BudgetExceededError as e:
+                # A deliberate stop, not a failure. Reported separately so the
+                # run log distinguishes "ran out of money" from "the API broke".
+                self.logger.warning(f"  {e}")
+                outcome = "budget_exceeded"
+                break
             except Exception as e:
                 self.logger.error(f"LLM call failed: {e}")
                 outcome = "error"
@@ -396,12 +410,19 @@ class AutonomousAgent:
                         self.logger.info(f"  PR created: {pr_url}")
 
         # ── Rollback on failure if rollback_on_failure ──
-        if outcome in ("failed", "max_retries", "error") and last_apply_results:
+        if (
+            outcome in ("failed", "max_retries", "error", "budget_exceeded")
+            and last_apply_results
+        ):
             self.logger.warning("  Rolling back file changes due to failed run...")
             restored = self.modifier.rollback(last_apply_results)
             self.logger.info(f"  Rolled back {len(restored)} file(s): {restored}")
 
         final_message = {
+            "budget_exceeded": (
+                f"Stopped at the --max-cost limit after {self.llm.usage.summary()}. "
+                f"Any applied changes were rolled back."
+            ),
             "success": "Task completed successfully. Tests pass.",
             "failed": "Task could not be completed. Check logs.",
             "max_retries": f"Exhausted {cfg.max_iterations} iterations without passing tests.",
