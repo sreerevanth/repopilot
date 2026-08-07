@@ -239,7 +239,7 @@ def run_demo(repo_root: str, task: str, max_iterations: int = 3):
 
 
 if __name__ == "__main__":
-    repo = sys.argv[1] if len(sys.argv) > 1 else "../sample_repo"
+    repo = sys.argv[1] if len(sys.argv) > 1 else "."
     task = (
         "Fix all failing tests in test_utils.py. "
         "Add proper ValueError guards to calculate_average, find_max, normalize, and parse_int_list."

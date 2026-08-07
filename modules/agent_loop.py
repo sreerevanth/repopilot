@@ -66,6 +66,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    model: Optional[str] = None
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -90,6 +91,7 @@ class AutonomousAgent:
         self.config = config
         self.run_id = f"{config.git_branch_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         self.branch_name: Optional[str] = None
+        self.pr_url: Optional[str] = None
 
         # Resolve paths
         cfg = self.config
@@ -98,7 +100,7 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(api_key=cfg.anthropic_api_key)
+        self.llm = LLMClient(api_key=cfg.anthropic_api_key, model=cfg.model)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 
@@ -164,7 +166,7 @@ class AutonomousAgent:
         last_changes: list[FileChange] = []
         last_apply_results: list[ApplyResult] = []
         outcome = "failed"
-        pr_url: Optional[str] = None
+        self.pr_url = None
         iterations_used = 0
 
         for iteration in range(1, cfg.max_iterations + 1):
@@ -381,7 +383,7 @@ class AutonomousAgent:
 
                 if push_result.success and cfg.git_create_pr:
                     diff_stat = self.git.diff_staged() or "See commit for changes."
-                    pr_url = self.git.create_github_pr(
+                    self.pr_url = self.git.create_github_pr(
                         title=f"[Agent] {cfg.task[:72]}",
                         body=(
                             f"## Autonomous Agent PR\n\n"
@@ -392,8 +394,8 @@ class AutonomousAgent:
                         head_branch=self.branch_name,
                         base_branch=cfg.git_base_branch,
                     )
-                    if pr_url:
-                        self.logger.info(f"  PR created: {pr_url}")
+                    if self.pr_url:
+                        self.logger.info(f"  PR created: {self.pr_url}")
 
         # ── Rollback on failure if rollback_on_failure ──
         if outcome in ("failed", "max_retries", "error") and last_apply_results:
@@ -408,13 +410,13 @@ class AutonomousAgent:
             "error": "Agent encountered an unrecoverable error.",
         }.get(outcome, "Unknown outcome")
 
-        self.logger.finish_run(outcome, self.branch_name, pr_url)
+        self.logger.finish_run(outcome, self.branch_name, self.pr_url)
 
         return AgentRunResult(
             run_id=self.run_id,
             outcome=outcome,
             branch_name=self.branch_name,
-            pr_url=pr_url,
+            pr_url=self.pr_url,
             iterations_used=iterations_used,
             final_message=final_message,
         )
