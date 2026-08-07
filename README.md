@@ -281,6 +281,23 @@ and an SDK without `messages.stream()` falls back to it automatically.
 ### Module 6 — `agent_loop.py` (CORE)
 
 - `AutonomousAgent.run()` orchestrates all modules.
+
+#### Linting before tests
+
+`--lint ruff` (or `flake8`, `pyflakes`, `eslint`, `tsc`, `govet`, `clippy`) runs
+a linter before the suite. A failure short-circuits the iteration and feeds the
+lint output back to the model, so a syntax error or an undefined name is
+corrected in under a second instead of arriving as a pytest collection error.
+
+The Python linters select error-class rules only (`E9,F`). A default rule set
+fails on style the model did not write — ruff's `I001` flags unsorted imports in
+otherwise valid code — which would make the gate fail every iteration regardless
+of what the model produced. Widen it per project with `--lint-args`.
+
+```bash
+python main.py --repo . --task "Fix the parser" --lint ruff
+```
+
 - Iterates up to `max_iterations` times.
 - On success: commits (optionally pushes + opens PR).
 - On failure: rolls back all file changes.

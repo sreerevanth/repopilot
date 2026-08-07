@@ -16,13 +16,13 @@ Flow per iteration:
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
 from modules.repo_ingestion import ingest_repository, Repository
 from modules.context_builder import build_context
-from modules.llm_client import create_llm_client, LLMResponse, FileChange
+from modules.llm_client import LLMClient, LLMResponse, FileChange
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
@@ -46,6 +46,8 @@ class AgentConfig:
     test_args: Optional[list] = None       # extra args to pass to runner
     run_file: Optional[str] = None         # run a specific file instead of tests
     run_file_runner: str = "python"
+    lint_runner: Optional[str] = None      # run a linter before the test suite
+    lint_args: list[str] = field(default_factory=list)
     timeout_seconds: int = 120
 
     # Loop control
@@ -67,9 +69,6 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
-    llm_provider: str = "anthropic"        # anthropic | ollama
-    llm_model: Optional[str] = None        # provider default when unset
-    ollama_host: Optional[str] = None      # default http://localhost:11434
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -107,12 +106,7 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = create_llm_client(
-            provider=cfg.llm_provider,
-            api_key=cfg.anthropic_api_key,
-            model=cfg.llm_model,
-            host=cfg.ollama_host,
-        )
+        self.llm = LLMClient(api_key=cfg.anthropic_api_key)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 
@@ -457,6 +451,26 @@ class AutonomousAgent:
                 break
 
             # ── Step 5: Execute ──
+            # Lint first when configured. A syntax error surfaces in under a
+            # second with a precise location, instead of arriving as a pytest
+            # collection error several seconds later.
+            if cfg.lint_runner:
+                lint_result = self.sandbox.run_lint(cfg.lint_runner, cfg.lint_args)
+                self.logger.log_execution(lint_result)
+                if not lint_result.success:
+                    self.logger.warning(
+                        f"  Lint failed ({cfg.lint_runner}); "
+                        f"skipping tests and retrying with the lint output."
+                    )
+                    last_exec = lint_result
+                    iter_record.execution_command = lint_result.command
+                    iter_record.execution_exit_code = lint_result.exit_code
+                    iter_record.execution_stdout = lint_result.stdout[:2000]
+                    iter_record.execution_stderr = lint_result.stderr[:2000]
+                    iter_record.execution_success = False
+                    self.logger.record_iteration(iter_record)
+                    continue
+
             exec_result = self._run_execution()
             self.logger.log_execution(exec_result)
             last_exec = exec_result

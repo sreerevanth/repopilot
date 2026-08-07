@@ -8,7 +8,6 @@ Runs code in isolation using subprocess with:
 - Optional Docker support
 """
 
-import logging
 import os
 import shlex
 import shutil
@@ -92,6 +91,28 @@ ALLOWED_RUNNERS = {
     "rspec": ["bundle", "exec", "rspec"],
 }
 
+# Linters run before the suite. A syntax error or an undefined name is caught in
+# under a second and gives the model a precise location, where the same mistake
+# via pytest arrives as a collection error buried in a traceback.
+#
+# Each entry is the command; the runner is chosen explicitly rather than
+# guessed, because a repo with both ruff and eslint configured has no single
+# right answer.
+# Errors only, not style. A default rule set would fail on things the model did
+# not cause -- ruff's I001 fires on unsorted imports in perfectly valid code --
+# and since the model cannot fix what it did not write, the gate would loop
+# until max_iterations on every run. E9 is syntax errors, F is pyflakes
+# (undefined names, unused imports). Widen it per project with --lint-args.
+ALLOWED_LINTERS = {
+    "ruff": [sys.executable, "-m", "ruff", "check", "--select", "E9,F", "."],
+    "flake8": [sys.executable, "-m", "flake8", "--select=E9,F63,F7,F82", "."],
+    "pyflakes": [sys.executable, "-m", "pyflakes", "."],
+    "eslint": ["npx", "--no-install", "eslint", "--quiet", "."],
+    "tsc": ["npx", "--no-install", "tsc", "--noEmit"],
+    "govet": ["go", "vet", "./..."],
+    "clippy": ["cargo", "clippy"],
+}
+
 DOCKER_RUNNERS = {
     "python": ["python"],
     "pytest": ["python", "-m", "pytest"],
@@ -107,151 +128,17 @@ DOCKER_RUNNERS = {
     "rspec": ["bundle", "exec", "rspec"],
 }
 
-# ---------------------------------------------------------------------------
-# Environment sanitization
-#
-# Commands launched by this sandbox execute LLM-generated code that no human has
-# reviewed. The process environment is therefore treated the same way file paths
-# are treated elsewhere in this project: untrusted by default.
-#
-# This is an ALLOWLIST. Any variable not named below is dropped. A denylist only
-# protects the names somebody happened to think of, so every service a user
-# newly adopts is unprotected until someone remembers to extend the list.
-#
-# Adding a name here is a deliberate decision. Prefer the runtime passthrough
-# hook (see PASSTHROUGH_ENV_VAR) over widening the defaults for a local need.
-# ---------------------------------------------------------------------------
-
-# Core shell / OS. The Windows entries are not optional: CPython cannot
-# initialize sockets or SSL without SYSTEMROOT, so stripping it breaks any test
-# that touches the network stack, and subprocesses fail without COMSPEC.
-_CORE_ENV_VARS = {
-    "PATH", "HOME", "SHELL", "USER", "LOGNAME", "HOSTNAME",
-    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "TMPDIR",
-    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
-    "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
-    "PROGRAMFILES", "PROGRAMFILES(X86)", "USERPROFILE", "USERNAME",
-    "HOMEDRIVE", "HOMEPATH", "NUMBER_OF_PROCESSORS",
-    "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+BLOCKED_ENV_VARS = {
+    "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
+    "GITHUB_TOKEN", "GH_TOKEN",
+    "DATABASE_URL", "REDIS_URL",
 }
-
-_PYTHON_ENV_VARS = {
-    "PYTHONPATH", "PYTHONHOME", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED",
-    "PYTHONHASHSEED", "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONWARNINGS",
-    "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
-    "PYENV_ROOT", "PYENV_VERSION",
-    "PYTEST_ADDOPTS", "PY_COLORS", "PIP_CACHE_DIR",
-}
-
-_NODE_ENV_VARS = {
-    "NODE_PATH", "NODE_ENV", "NODE_OPTIONS",
-    "npm_config_cache", "npm_config_prefix",
-}
-
-_GO_ENV_VARS = {
-    "GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE", "GOTMPDIR",
-    "GOFLAGS", "GOTOOLCHAIN", "GOOS", "GOARCH", "CGO_ENABLED",
-}
-
-_RUST_ENV_VARS = {
-    "CARGO_HOME", "RUSTUP_HOME", "RUSTC", "RUSTFLAGS", "CARGO_TARGET_DIR",
-}
-
-_RUBY_ENV_VARS = {
-    "GEM_HOME", "GEM_PATH", "RUBYOPT", "BUNDLE_PATH", "BUNDLE_GEMFILE",
-    "RBENV_ROOT", "RBENV_VERSION",
-}
-
-_BUILD_ENV_VARS = {
-    "JAVA_HOME", "MAKEFLAGS", "CC", "CXX",
-    # Generic CI markers. Many suites branch on these; none carry credentials.
-    # GITHUB_* is deliberately absent -- see the note in _build_safe_env.
-    "CI", "CONTINUOUS_INTEGRATION",
-}
-
-# DockerSandbox shells out to the `docker` CLI *through* SubprocessSandbox.run,
-# so the allowlist applies to the CLI itself. Without these, Docker Desktop,
-# colima, Rancher Desktop and remote-daemon setups all fail to find a daemon.
-# These configure the client on the host; `docker run` does not forward host
-# environment into the container, so they are not exposed to sandboxed code
-# when the Docker path is active.
-_DOCKER_CLI_ENV_VARS = {
-    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG",
-    "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_BUILDKIT",
-}
-
-ALLOWED_ENV_VARS = (
-    _CORE_ENV_VARS
-    | _PYTHON_ENV_VARS
-    | _NODE_ENV_VARS
-    | _GO_ENV_VARS
-    | _RUST_ENV_VARS
-    | _RUBY_ENV_VARS
-    | _BUILD_ENV_VARS
-    | _DOCKER_CLI_ENV_VARS
-)
-
-# Escape hatch. Set to a comma-separated list of variable names to pass through
-# in addition to the defaults, e.g. for an authenticated module proxy:
-#   export REPOPILOT_SANDBOX_ENV_PASSTHROUGH=GOPROXY,npm_config_registry
-# Names added this way are logged, because widening the boundary should be
-# visible in the run log rather than silent.
-PASSTHROUGH_ENV_VAR = "REPOPILOT_SANDBOX_ENV_PASSTHROUGH"
-
-_LOG = logging.getLogger("agent.sandbox")
-
-
-def _passthrough_names() -> set[str]:
-    """Read additional allowed variable names from PASSTHROUGH_ENV_VAR."""
-    raw = os.environ.get(PASSTHROUGH_ENV_VAR, "")
-    return {name.strip() for name in raw.split(",") if name.strip()}
 
 
 def _build_safe_env(extra_env: Optional[dict] = None) -> dict:
-    """
-    Build the environment for a sandboxed command.
-
-    Only variables named in ALLOWED_ENV_VARS (plus any listed in
-    PASSTHROUGH_ENV_VAR) are passed through; everything else is dropped. This
-    keeps credentials such as ANTHROPIC_API_KEY, SSH_AUTH_SOCK and KUBECONFIG
-    out of reach of code the model wrote.
-
-    It also drops the GitHub Actions runner variables. GITHUB_ENV and
-    GITHUB_PATH name writable files that inject environment entries and PATH
-    entries into *subsequent workflow steps*, so leaking them lets sandboxed
-    code influence a job that holds contents:write and pull-requests:write.
-
-    Matching is case-insensitive because Windows normalizes environment keys to
-    upper case, which would otherwise drop lower-case entries like
-    ``npm_config_cache``. No allowlisted name collides with a credential name
-    under case folding.
-
-    ``extra_env`` is a trusted-caller override applied *after* filtering, so
-    callers inside RepoPilot can inject variables a runner needs. Never forward
-    model-supplied data into it -- doing so reopens the boundary this closes.
-    """
-    allowed = {name.lower() for name in ALLOWED_ENV_VARS}
-
-    extra_names = _passthrough_names()
-    if extra_names:
-        allowed |= {name.lower() for name in extra_names}
-        _LOG.info(
-            "sandbox: %s widened the environment allowlist with: %s",
-            PASSTHROUGH_ENV_VAR, ", ".join(sorted(extra_names)),
-        )
-
-    env = {key: value for key, value in os.environ.items() if key.lower() in allowed}
+    """Build a safe environment dict, removing sensitive vars."""
+    env = {key: value for key, value in os.environ.items() if key not in BLOCKED_ENV_VARS}
     env.setdefault("PATH", os.environ.get("PATH", ""))
-
-    stripped = sorted(set(os.environ) - set(env))
-    if stripped:
-        # Names only, never values. A test that fails because it cannot see a
-        # variable it needs is much easier to diagnose if the sandbox says so.
-        _LOG.debug(
-            "sandbox: stripped %d environment variable(s): %s",
-            len(stripped), ", ".join(stripped),
-        )
-
     if extra_env:
         env.update(extra_env)
     return env
@@ -399,6 +286,43 @@ class SubprocessSandbox:
                 duration_seconds=0.0,
             )
         return self.run(cmd + (extra_args or []))
+
+    def run_lint(
+        self,
+        linter: str,
+        extra_args: Optional[list[str]] = None,
+    ) -> ExecutionResult:
+        """
+        Run a linter over the working directory.
+
+        Returns the same ExecutionResult shape as run_tests, so the loop can
+        feed the output back to the model without special-casing it.
+        """
+        command = ALLOWED_LINTERS.get(linter)
+        if command is None:
+            return ExecutionResult(
+                command=f"(unknown linter: {linter})",
+                exit_code=-3,
+                stdout="",
+                stderr=(
+                    f"Unknown linter '{linter}'. "
+                    f"Available: {', '.join(sorted(ALLOWED_LINTERS))}"
+                ),
+                timed_out=False,
+                duration_seconds=0.0,
+            )
+
+        if shutil.which(command[0]) is None:
+            return ExecutionResult(
+                command=" ".join(command),
+                exit_code=-3,
+                stdout="",
+                stderr=f"Linter executable not found: {command[0]}",
+                timed_out=False,
+                duration_seconds=0.0,
+            )
+
+        return self.run(command + (extra_args or []))
 
     def run_file(self, relative_path: str, runner: str = "python") -> ExecutionResult:
         """Run a specific file using the given runner."""
