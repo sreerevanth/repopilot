@@ -26,6 +26,7 @@ from modules.llm_client import LLMClient, LLMResponse, FileChange
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
+from modules.doc_lookup import perform_lookups, render_lookups
 from modules.logger import AgentLogger, IterationRecord
 
 
@@ -69,6 +70,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    allow_lookups: bool = False            # let the model fetch documentation
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -296,6 +298,24 @@ class AutonomousAgent:
             try:
                 if iteration == 1 or not last_exec:
                     llm_resp: LLMResponse = self.llm.initial_request(cfg.task, context_str)
+
+                    if cfg.allow_lookups and llm_resp.lookups:
+                        # One retry only. Letting the model ask again after
+                        # seeing the docs would loop at a call per round with no
+                        # bound worth defending.
+                        results = perform_lookups(llm_resp.lookups)
+                        for result in results:
+                            if result.ok:
+                                self.logger.info(f"  Looked up {result.url}")
+                            else:
+                                self.logger.warning(
+                                    f"  Lookup refused: {result.url} - {result.error}"
+                                )
+                        rendered = render_lookups(results)
+                        if rendered:
+                            llm_resp = self.llm.initial_request(
+                                cfg.task, f"{context_str}\n\n{rendered}"
+                            )
                 else:
                     llm_resp = self.llm.retry_request(
                         task=cfg.task,

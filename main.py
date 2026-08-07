@@ -72,6 +72,10 @@ Examples:
                         help="Execution timeout in seconds (default: 120)")
 
     # Loop control
+    parser.add_argument("--allow-lookups", action="store_true",
+                        help="Let the model fetch documentation pages when it is "
+                             "unsure of a third-party API. HTTPS only, and only from "
+                             "an allowlist of documentation hosts.")
     parser.add_argument("--max-iter", type=int, default=5,
                         help="Maximum number of agent iterations (default: 5)")
 
@@ -207,6 +211,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        allow_lookups=args.allow_lookups,
     )
 
     try:

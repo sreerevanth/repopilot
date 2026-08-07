@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 _LOG = logging.getLogger("agent.llm_client")
@@ -86,6 +86,7 @@ Return a JSON object with this exact schema:
     }
   ],
   "confidence": <0.0-1.0 float>,
+  "lookups": ["<https doc URL you need before answering>", ...],
   "done": <true if you believe the task is complete, false if more iterations needed>
 }
 
@@ -96,6 +97,10 @@ RULES:
 - Paths must be relative (e.g., "src/utils.py"), never absolute.
 - If you cannot determine a fix, set confidence < 0.3 and done=false with a clear analysis.
 - Preserve existing code style, indentation, and conventions.
+- If a task depends on a third-party API you are unsure of, put documentation
+  URLs in "lookups" and set done=false rather than guessing at method names.
+  Only https URLs on documentation hosts are fetched; anything else is refused
+  and the reason is returned to you.
 """
 
 _BUILTIN_TASK_PROMPT = """\
@@ -156,6 +161,7 @@ class LLMResponse:
     confidence: float
     done: bool
     parse_error: Optional[str] = None
+    lookups: list = field(default_factory=list)   # doc URLs the model asked for
 
 
 SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
@@ -288,6 +294,10 @@ class LLMClient:
             analysis=data.get("analysis", ""),
             changes=changes,
             confidence=float(data.get("confidence", 0.5)),
+            lookups=[
+                str(u) for u in (data.get("lookups") or [])
+                if isinstance(data.get("lookups"), list)
+            ],
             done=bool(data.get("done", False)),
         )
 
