@@ -1,0 +1,9 @@
+## Task
+{task}
+
+## Repository Context
+{context}
+
+## Instructions
+Analyze the code and produce the minimal changes needed to complete the task.
+Return ONLY the JSON object specified in the system prompt.
