@@ -299,7 +299,10 @@ and an SDK without `messages.stream()` falls back to it automatically.
 
 - Validates paths (prevents directory traversal).
 - Backs up every file before modification.
-- Supports `modify`, `create`, `delete` actions.
+- Supports `modify`, `create`, `delete` and `rename` actions (`move` is accepted
+  as a synonym). A rename takes a `new_path`; include `content` only if the
+  file's contents change too. Renames refuse to overwrite an existing file, and
+  rolling one back removes the moved copy as well as restoring the original.
 - `rollback()` restores all backups on failure.
 
 ### Module 5 — `sandbox.py`
