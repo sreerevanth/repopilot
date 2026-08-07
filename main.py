@@ -99,6 +99,11 @@ Examples:
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
+    parser.add_argument("--resume", dest="resume_from", default=None, metavar="RUN_ID",
+                        help="Continue an interrupted run from its last completed "
+                             "iteration. Use --list-resumable to see candidates.")
+    parser.add_argument("--list-resumable", action="store_true",
+                        help="List run ids that can be resumed, then exit.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
     # API key
@@ -151,6 +156,15 @@ def main():
             print(f"Warning: Failed to load config file {config_file}: {e}", file=sys.stderr)
 
     repo_root = os.path.abspath(args.repo)
+    if args.list_resumable:
+        from modules.run_state import list_resumable
+        candidates = list_resumable(args.log_dir)
+        if not candidates:
+            print("No resumable runs found.")
+        for run_id in candidates:
+            print(run_id)
+        sys.exit(0)
+
     if args.rollback:
         modifier = CodeModificationEngine(repo_root=repo_root, backup_dir="backups")
         success = modifier.git_stash_pop(repo_root)
@@ -207,6 +221,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        resume_from=args.resume_from,
     )
 
     try:

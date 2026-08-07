@@ -26,6 +26,13 @@ from modules.llm_client import LLMClient, LLMResponse, FileChange
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
+from modules.run_state import (
+    RunState,
+    check_resumable,
+    clear_state,
+    load_state,
+    save_state,
+)
 from modules.logger import AgentLogger, IterationRecord
 
 
@@ -69,6 +76,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    resume_from: Optional[str] = None      # run_id to continue
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -264,11 +272,36 @@ class AutonomousAgent:
         last_exec: Optional[ExecutionResult] = None
         last_changes: list[FileChange] = []
         last_apply_results: list[ApplyResult] = []
+        start_iteration = 1
+
+        if cfg.resume_from:
+            state = load_state(cfg.log_dir, cfg.resume_from)
+            check_resumable(state, cfg.repo_root, cfg.task)
+            start_iteration = state.iteration + 1
+            self.branch_name = state.branch_name or self.branch_name
+            last_changes = [FileChange(**c) for c in state.last_changes]
+            if state.last_exit_code is not None:
+                # Rebuilt rather than stored whole: the retry prompt only reads
+                # these four fields, and persisting a full ExecutionResult would
+                # tie the state file to that dataclass's shape.
+                last_exec = ExecutionResult(
+                    command="(restored from a previous run)",
+                    exit_code=state.last_exit_code,
+                    stdout=state.last_stdout,
+                    stderr=state.last_stderr,
+                    timed_out=False,
+                    duration_seconds=0.0,
+                )
+            self.logger.info(
+                f"  Resuming '{cfg.resume_from}' at iteration {start_iteration} "
+                f"({len(last_changes)} change(s) from the previous attempt)."
+            )
+
         outcome = "failed"
         self.pr_url = None
         iterations_used = 0
 
-        for iteration in range(1, cfg.max_iterations + 1):
+        for iteration in range(start_iteration, cfg.max_iterations + 1):
             iterations_used = iteration
             self.logger.start_iteration(iteration)
 
@@ -484,6 +517,21 @@ class AutonomousAgent:
 
             self.logger.record_iteration(iter_record)
 
+            save_state(
+                RunState(
+                    run_id=self.run_id,
+                    task=cfg.task,
+                    repo_root=cfg.repo_root,
+                    iteration=iteration,
+                    branch_name=self.branch_name,
+                    last_changes=[c.__dict__ for c in last_changes],
+                    last_exit_code=exec_result.exit_code,
+                    last_stdout=exec_result.stdout[:8000],
+                    last_stderr=exec_result.stderr[:8000],
+                ),
+                cfg.log_dir,
+            )
+
             # ── Step 6: Success check ──
             if exec_result.success:
                 self.logger.info(f"  Tests passed on iteration {iteration}")
@@ -541,6 +589,11 @@ class AutonomousAgent:
             self.logger.warning("  Rolling back file changes due to failed run...")
             restored = self.modifier.rollback(last_apply_results)
             self.logger.info(f"  Rolled back {len(restored)} file(s): {restored}")
+
+        if outcome not in ("failed", "max_retries", "error"):
+            # A run that ended deliberately has nothing to resume. Leaving the
+            # checkpoint would offer to continue a finished run.
+            clear_state(cfg.log_dir, self.run_id)
 
         final_message = {
             "success": "Task completed successfully. Tests pass.",
