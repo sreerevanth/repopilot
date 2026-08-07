@@ -139,6 +139,17 @@ class GitIntegration:
         result = self._run(["git", "diff", "--cached", "--stat"])
         return result.output
 
+    def diff_unstaged(self, stat_only: bool = False) -> str:
+        """
+        Return the working-tree diff for changes that are not yet staged.
+
+        Used by --interactive to show what the agent actually wrote before
+        anything is committed. `git_stash_before_apply` stashes any pre-existing
+        local edits first, so this diff contains only the agent's own changes.
+        """
+        cmd = ["git", "diff", "--stat"] if stat_only else ["git", "diff"]
+        return self._run(cmd).output
+
     def get_remote_url(self, remote: str = "origin") -> Optional[str]:
         result = self._run(["git", "remote", "get-url", remote])
         return result.output if result.success else None

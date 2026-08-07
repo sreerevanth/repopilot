@@ -39,6 +39,7 @@ class AgentConfig:
     task: str
     dry_run: bool = False
     yes: bool = False
+    interactive: bool = False   # pause for review after tests pass, before commit
 
     # Execution
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
@@ -77,7 +78,7 @@ class AgentConfig:
 @dataclass
 class AgentRunResult:
     run_id: str
-    outcome: str        # success | failed | max_retries | error
+    outcome: str        # success | failed | max_retries | error | aborted | dry_run
     branch_name: Optional[str]
     pr_url: Optional[str]
     iterations_used: int
@@ -129,6 +130,49 @@ class AutonomousAgent:
             return self.sandbox.run_file(cfg.run_file, cfg.run_file_runner)
         else:
             return self.sandbox.run_tests(cfg.test_runner, cfg.test_args)
+
+    # Cap the review diff so a large refactor cannot flood the terminal.
+    _MAX_DIFF_LINES = 400
+
+    def _confirm_commit(self, changed_paths: list[str]) -> bool:
+        """
+        Show what the agent wrote and ask before committing.
+
+        Only runs under --interactive. --yes bypasses it (and main.py sets that
+        automatically when CI=true), matching how the pre-apply prompt behaves,
+        so unattended runs are never left waiting on stdin.
+        """
+        cfg = self.config
+        if not cfg.interactive or cfg.yes:
+            return True
+
+        from modules.dry_run import ask_confirmation
+
+        print("\n" + "=" * 60)
+        print("  TESTS PASSED - REVIEW BEFORE COMMIT")
+        print("=" * 60)
+
+        diff = self.git.diff_unstaged() if self.git else ""
+        if diff.strip():
+            lines = diff.splitlines()
+            for line in lines[: self._MAX_DIFF_LINES]:
+                print(line)
+            if len(lines) > self._MAX_DIFF_LINES:
+                print(
+                    f"\n  ... diff truncated at {self._MAX_DIFF_LINES} lines "
+                    f"({len(lines) - self._MAX_DIFF_LINES} more). "
+                    f"Run `git diff` in another shell for the full text."
+                )
+        else:
+            # No git, or git reported nothing. Fall back to the file list so the
+            # prompt is never shown without context.
+            reason = "Git is disabled" if not self.git else "Git reported no diff"
+            print(f"  {reason}. Files the agent changed:")
+            for path in changed_paths:
+                print(f"    {path}")
+
+        print("=" * 60)
+        return ask_confirmation(len(changed_paths), action="Commit")
 
     def _commit_changes(self, iteration: int, changed_paths: list[str]) -> bool:
         """Stage and commit the modified files."""
@@ -340,7 +384,16 @@ class AutonomousAgent:
             # ── Early exit if LLM says done (optional) ──
             if cfg.success_on_llm_done and llm_resp.done and llm_resp.confidence >= 0.8:
                 self.logger.info("  LLM reports task complete. Skipping execution (success_on_llm_done=True).")
-                self._commit_changes(iteration, [c.path for c in last_changes])
+                changed_paths = [c.path for c in last_changes]
+                if not self._confirm_commit(changed_paths):
+                    self.logger.warning(
+                        "  Commit declined. Changes are left in the working tree."
+                    )
+                    outcome = "aborted"
+                    self.logger.record_iteration(iter_record)
+                    break
+
+                self._commit_changes(iteration, changed_paths)
                 outcome = "success"
                 iter_record.execution_success = True
                 self.logger.record_iteration(iter_record)
@@ -363,7 +416,16 @@ class AutonomousAgent:
             # ── Step 6: Success check ──
             if exec_result.success:
                 self.logger.info(f"  Tests passed on iteration {iteration}")
-                self._commit_changes(iteration, [c.path for c in last_changes])
+
+                changed_paths = [c.path for c in last_changes]
+                if not self._confirm_commit(changed_paths):
+                    self.logger.warning(
+                        "  Commit declined. Changes are left in the working tree."
+                    )
+                    outcome = "aborted"
+                    break
+
+                self._commit_changes(iteration, changed_paths)
                 outcome = "success"
                 break
 
@@ -414,6 +476,11 @@ class AutonomousAgent:
             "failed": "Task could not be completed. Check logs.",
             "max_retries": f"Exhausted {cfg.max_iterations} iterations without passing tests.",
             "error": "Agent encountered an unrecoverable error.",
+            "aborted": (
+                "Commit declined at the review prompt. Tests passed and the "
+                "changes are still in the working tree - commit them manually, "
+                "or run with --rollback to discard them."
+            ),
         }.get(outcome, "Unknown outcome")
 
         self.logger.finish_run(outcome, self.branch_name, pr_url)
