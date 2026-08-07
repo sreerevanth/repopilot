@@ -103,6 +103,13 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for an architecture walkthrough, how to
+run the pipeline locally without an API key, and the project's conventions.
+
+---
+
 ## Usage
 
 ### Basic — fix failing tests
