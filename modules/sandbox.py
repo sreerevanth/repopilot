@@ -256,7 +256,7 @@ class DockerSandbox:
             "--network=none",
             "--memory=512m",
             "--cpus=1",
-            "-v", f"{self.working_dir}:/workspace:ro",
+            "-v", f"{self.working_dir}:/workspace:rw",
             "-w", "/workspace",
             self.image,
             "sh", "-c", shlex.join(inner_cmd),
