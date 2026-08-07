@@ -95,6 +95,10 @@ Examples:
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
 
+    # Model configuration
+    parser.add_argument("--model", default=None,
+                        help="LLM model name to use (default: claude-sonnet-4-20250514)")
+
     return parser.parse_args()
 
 
@@ -164,6 +168,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        model=args.model,
     )
 
     try:

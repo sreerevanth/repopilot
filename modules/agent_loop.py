@@ -66,6 +66,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    model: Optional[str] = None
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -98,7 +99,7 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(api_key=cfg.anthropic_api_key)
+        self.llm = LLMClient(api_key=cfg.anthropic_api_key, model=cfg.model)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 
