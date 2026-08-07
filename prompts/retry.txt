@@ -1,0 +1,22 @@
+## Task
+{task}
+
+## Previous Changes Applied
+The following files were modified in the previous iteration:
+{previous_changes_summary}
+
+## Execution Result (FAILED)
+Exit code: {exit_code}
+
+### stdout:
+{stdout}
+
+### stderr:
+{stderr}
+
+## Current Repository Context
+{context}
+
+## Instructions
+The previous attempt failed. Analyze the error output carefully and produce corrected changes.
+Focus on the root cause of the failure. Return ONLY the JSON object.

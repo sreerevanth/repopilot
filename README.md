@@ -248,6 +248,11 @@ through as a literal task would send the agent off to implement a URL.
 ### Module 3 — `llm_client.py`
 
 - Wraps the Anthropic API with structured JSON I/O.
+- Prompts live in `prompts/*.txt` (`system`, `initial`, `retry`) so they can be
+  edited and diffed without touching Python. Point `REPOPILOT_PROMPT_DIR` at
+  another directory to try an alternative set. A missing, empty or unreadable
+  file falls back to the built-in text, so a bad checkout degrades to the
+  previous behaviour rather than leaving the agent with no prompt.
 - System prompt enforces a machine-parseable output schema.
 - `initial_request()` for first pass; `retry_request()` for error-fed retries.
 - Parses `FileChange[]` from JSON; gracefully handles malformed output.

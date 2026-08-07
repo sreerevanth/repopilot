@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
@@ -28,7 +29,42 @@ MAX_TOKENS = 8192
 # Prompt Templates
 # ─────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an expert software engineer embedded in an autonomous code modification pipeline.
+# ─────────────────────────────────────────────
+# Prompt loading
+# ─────────────────────────────────────────────
+#
+# Prompts live in prompts/*.txt so they can be edited, diffed and swapped
+# without touching Python. The values below are the fallback: if a file is
+# missing or unreadable the built-in text is used, so a bad checkout degrades
+# to today's behaviour instead of leaving the agent with no prompt at all.
+#
+# Point REPOPILOT_PROMPT_DIR at another directory to try an alternative set.
+
+PROMPT_DIR_ENV_VAR = "REPOPILOT_PROMPT_DIR"
+DEFAULT_PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
+
+
+def prompt_dir() -> Path:
+    override = os.environ.get(PROMPT_DIR_ENV_VAR)
+    return Path(override) if override else DEFAULT_PROMPT_DIR
+
+
+def load_prompt(name: str, fallback: str) -> str:
+    """Read prompts/<name>.txt, falling back to the built-in text."""
+    path = prompt_dir() / f"{name}.txt"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _LOG.debug("using built-in '%s' prompt (%s)", name, exc)
+        return fallback
+
+    if not text.strip():
+        _LOG.warning("%s is empty; using the built-in prompt instead", path)
+        return fallback
+    return text
+
+
+_BUILTIN_SYSTEM_PROMPT = """You are an expert software engineer embedded in an autonomous code modification pipeline.
 You receive:
 1. A task description
 2. Relevant source files from the repository
@@ -62,7 +98,7 @@ RULES:
 - Preserve existing code style, indentation, and conventions.
 """
 
-TASK_PROMPT_TEMPLATE = """\
+_BUILTIN_TASK_PROMPT = """\
 ## Task
 {task}
 
@@ -74,7 +110,7 @@ Analyze the code and produce the minimal changes needed to complete the task.
 Return ONLY the JSON object specified in the system prompt.
 """
 
-RETRY_PROMPT_TEMPLATE = """\
+_BUILTIN_RETRY_PROMPT = """\
 ## Task
 {task}
 
@@ -120,6 +156,11 @@ class LLMResponse:
     confidence: float
     done: bool
     parse_error: Optional[str] = None
+
+
+SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
+TASK_PROMPT_TEMPLATE = load_prompt("initial", _BUILTIN_TASK_PROMPT)
+RETRY_PROMPT_TEMPLATE = load_prompt("retry", _BUILTIN_RETRY_PROMPT)
 
 
 # ─────────────────────────────────────────────
