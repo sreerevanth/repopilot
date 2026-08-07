@@ -302,6 +302,22 @@ given run (names only — values are never logged).
   to skip it. Other push failures (missing remote, auth, network, protected
   branch) are classified and get a specific remedy appended to the error.
 
+### Module 9 — `notify.py`
+
+- Posts the run outcome to a webhook when `WEBHOOK_URL` is set. A six-iteration
+  run takes ten minutes or more, so people walk away from the terminal.
+- Detects Slack and Discord from the URL and uses each one's payload key; any
+  other endpoint receives the structured fields as JSON.
+- Cannot fail a run. A broken URL, unreachable host or rejected request is
+  reported through the log and the return value, never raised — the agent's
+  work is already finished by the time this fires.
+- Only `http`/`https` URLs are sent. Uses `urllib`, so no new dependency.
+
+```bash
+export WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/xxxx
+python main.py --repo . --task "Fix the failing parser test"
+```
+
 ### Module 8 — `logger.py`
 
 - Every iteration appended to `<run_id>.jsonl` (structured, machine-readable).

@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.agent_loop import AutonomousAgent, AgentConfig
+from modules.notify import notify_run_complete
 from modules.code_modifier import CodeModificationEngine
 
 
@@ -212,6 +213,8 @@ def main():
             print(f"PR URL    : {result.pr_url}")
         print(f"MESSAGE   : {result.final_message}")
         print(f"{'='*60}")
+
+        notify_run_complete(result, task)
 
         write_github_output({
             "outcome": result.outcome,
