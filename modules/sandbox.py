@@ -77,7 +77,13 @@ BLOCKED_ENV_VARS = {
 
 
 def _build_safe_env(extra_env: Optional[dict] = None) -> dict:
-    """Build a safe environment dict, removing sensitive vars."""
+    """
+    Build a safe environment dict, removing sensitive vars.
+    NOTE: Stripping sensitive variables (like GITHUB_TOKEN) only applies to the command
+    environment passed to sandbox subprocesses. The parent process environment remains intact
+    so that modules like git_integration can still access variables (e.g. GITHUB_TOKEN)
+    to create pull requests.
+    """
     env = {key: value for key, value in os.environ.items() if key not in BLOCKED_ENV_VARS}
     env.setdefault("PATH", os.environ.get("PATH", ""))
     if extra_env:
