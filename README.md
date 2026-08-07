@@ -292,6 +292,15 @@ given run (names only — values are never logged).
 - Wraps `git` subprocess calls: `create_branch`, `stage_files`, `commit`, `push`.
 - GitHub PR creation via REST API (no extra dependencies — uses `urllib`).
 - `rollback` is handled by `code_modifier.py`; git ops are only for success path.
+- `create_branch` refuses to reuse an existing branch that does not already
+  contain the base branch, rather than checking it out and running the agent
+  against a stale tree.
+- A push rejected because the remote branch moved is retried once after
+  `git rebase`. A rebase that conflicts is aborted, leaving the working tree
+  untouched — an unattended agent cannot resolve conflicts, and a repository
+  left mid-rebase is worse than a failed push. Pass `retry_with_rebase=False`
+  to skip it. Other push failures (missing remote, auth, network, protected
+  branch) are classified and get a specific remedy appended to the error.
 
 ### Module 8 — `logger.py`
 

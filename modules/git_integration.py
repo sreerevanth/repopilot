@@ -22,6 +22,55 @@ class GitResult:
     error: str
 
 
+PUSH_REMEDIES = {
+    "non-fast-forward": (
+        "The remote branch has commits this one does not. A rebase was either "
+        "not attempted or did not resolve it -- fetch and rebase manually, or "
+        "push to a new branch name."
+    ),
+    "no-remote": (
+        "No such remote. Add one with `git remote add origin <url>`, or run "
+        "without --push."
+    ),
+    "auth": (
+        "Authentication failed. Check your SSH key or that GITHUB_TOKEN is set "
+        "and has push access to this repository."
+    ),
+    "network": (
+        "Could not reach the remote. Check connectivity and try again; the "
+        "commit is safe locally."
+    ),
+    "protected": (
+        "The remote refused the update -- the branch is likely protected, or a "
+        "hook rejected it. Push to a different branch and open a PR."
+    ),
+    "unknown": (
+        "Push failed. The commit is safe locally; push manually to inspect."
+    ),
+}
+
+
+def classify_push_failure(stderr: str) -> str:
+    """Map git's push error text onto a remedy key."""
+    text = (stderr or "").lower()
+    # Checked first: a protected-branch refusal may or may not also say
+    # "rejected", and rebasing would not help either way.
+    if any(k in text for k in ("protected branch", "pre-receive hook",
+                               "gh006", "protected")):
+        return "protected"
+    if "non-fast-forward" in text or "fetch first" in text or "rejected" in text:
+        return "non-fast-forward"
+    if "does not appear to be a git repository" in text or "no such remote" in text:
+        return "no-remote"
+    if any(k in text for k in ("permission denied", "authentication failed",
+                              "could not read username", "403")):
+        return "auth"
+    if any(k in text for k in ("could not resolve host", "connection timed out",
+                               "network is unreachable", "operation timed out")):
+        return "network"
+    return "unknown"
+
+
 class GitIntegration:
     def __init__(self, repo_root: str):
         self.repo_root = os.path.abspath(repo_root)
@@ -73,17 +122,53 @@ class GitIntegration:
         result = self._run(["git", "branch", "--show-current"])
         return result.output or "unknown"
 
+    def branch_exists(self, branch: str) -> bool:
+        return self._run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"]
+        ).success
+
+    def _contains(self, ancestor: str, descendant: str) -> bool:
+        """True if `descendant` already contains every commit in `ancestor`."""
+        return self._run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant]
+        ).success
+
     def create_branch(self, branch_name: str, from_branch: str = "main") -> GitResult:
-        """Create and checkout a new branch."""
+        """
+        Create and checkout a new branch off `from_branch`.
+
+        If the branch already exists, it is only reused when it already contains
+        the base branch's tip. Falling back to a plain checkout unconditionally
+        looks like success while silently putting the agent on a stale branch --
+        it then works against an out-of-date base and opens a PR from it.
+        """
         base = self._run(["git", "rev-parse", "--verify", from_branch])
         if not base.success:
             base = self._run(["git", "rev-parse", "--verify", "master"])
             from_branch = "master" if base.success else "HEAD"
 
         result = self._run(["git", "checkout", "-b", branch_name, from_branch])
-        if not result.success:
-            result = self._run(["git", "checkout", branch_name])
-        return result
+        if result.success:
+            return result
+
+        if not self.branch_exists(branch_name):
+            # Failed for some other reason -- uncommitted changes in the way,
+            # an invalid name. Report it rather than papering over it.
+            return result
+
+        if not self._contains(from_branch, branch_name):
+            return GitResult(
+                command=f"git checkout -b {branch_name} {from_branch}",
+                success=False,
+                output="",
+                error=(
+                    f"Branch '{branch_name}' already exists and does not contain "
+                    f"'{from_branch}'. Checking it out would run the agent against "
+                    f"a stale base. Delete it, or choose another branch name."
+                ),
+            )
+
+        return self._run(["git", "checkout", branch_name])
 
     def stage_all(self) -> GitResult:
         """Stage all modified and new files."""
@@ -127,12 +212,83 @@ class GitIntegration:
         except Exception as exc:
             return GitResult(command=" ".join(cmd), success=False, output="", error=str(exc))
 
-    def push(self, branch: str, remote: str = "origin", force: bool = False) -> GitResult:
-        """Push branch to remote."""
-        cmd = ["git", "push", remote, branch]
+    def rebase_onto_remote(self, branch: str, remote: str = "origin") -> GitResult:
+        """
+        Fetch the remote branch and rebase onto it.
+
+        A rebase that hits conflicts is aborted rather than left half-applied --
+        an unattended agent has no way to resolve them, and stopping mid-rebase
+        would leave the user's working tree in a state they did not ask for.
+        """
+        fetch = self._run(["git", "fetch", remote, branch])
+        if not fetch.success:
+            return fetch
+
+        rebase = self._run(["git", "rebase", f"{remote}/{branch}"])
+        if rebase.success:
+            return rebase
+
+        self._run(["git", "rebase", "--abort"])
+        return GitResult(
+            command=f"git rebase {remote}/{branch}",
+            success=False,
+            output=rebase.output,
+            error=(
+                f"Rebase onto {remote}/{branch} hit conflicts and was aborted; "
+                f"the working tree is unchanged. Resolve manually, or push to a "
+                f"new branch name.\n{rebase.error}"
+            ),
+        )
+
+    def push(
+        self,
+        branch: str,
+        remote: str = "origin",
+        force: bool = False,
+        retry_with_rebase: bool = True,
+        set_upstream: bool = True,
+    ) -> GitResult:
+        """
+        Push `branch` to `remote`, recovering from a diverged remote branch.
+
+        A rejected push is the one git failure worth retrying automatically: it
+        means the remote branch moved, and rebasing on top is what a person
+        would do. Everything else (missing remote, auth, network) gets a
+        diagnosis appended instead, because retrying will not help.
+        """
+        cmd = ["git", "push"]
+        if set_upstream:
+            cmd.append("--set-upstream")
+        cmd += [remote, branch]
         if force:
             cmd.append("--force-with-lease")
-        return self._run(cmd)
+
+        result = self._run(cmd)
+        if result.success:
+            return result
+
+        reason = classify_push_failure(result.error)
+
+        if reason == "non-fast-forward" and retry_with_rebase and not force:
+            rebase = self.rebase_onto_remote(branch, remote)
+            if rebase.success:
+                retried = self._run(cmd)
+                if retried.success:
+                    return retried
+                result = retried
+                reason = classify_push_failure(retried.error)
+            else:
+                return GitResult(
+                    command=" ".join(cmd), success=False,
+                    output=result.output, error=rebase.error,
+                )
+
+        return GitResult(
+            command=" ".join(cmd),
+            success=False,
+            output=result.output,
+            error=f"{result.error}\n\n{PUSH_REMEDIES[reason]}",
+        )
 
     def diff_staged(self) -> str:
         """Return the staged diff as a string for PR descriptions."""
