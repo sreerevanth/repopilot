@@ -110,6 +110,33 @@ Analyze the code and produce the minimal changes needed to complete the task.
 Return ONLY the JSON object specified in the system prompt.
 """
 
+# The planning pass deliberately forbids code. Asking for a plan and changes in
+# one response reliably produces changes with a plan-shaped preamble -- the
+# model commits to an approach and then justifies it, which is the opposite of
+# planning. A separate call with no code in the schema keeps the two apart.
+_BUILTIN_PLAN_PROMPT = """\
+## Task
+{task}
+
+## Repository Context
+{context}
+
+## Instructions
+Do NOT write any code yet. Work out how you would approach this task.
+
+Return ONLY a JSON object with this schema:
+
+{{
+  "plan": ["<step>", "<step>", ...],
+  "files_to_change": ["<relative path>", ...],
+  "risks": ["<what could go wrong or is unclear>", ...],
+  "confidence": <0.0-1.0 float>
+}}
+
+Keep the plan to at most 6 steps. If the task is unclear or the context is
+insufficient, say so in "risks" and set confidence below 0.4.
+"""
+
 _BUILTIN_RETRY_PROMPT = """\
 ## Task
 {task}
@@ -149,6 +176,33 @@ class FileChange:
 
 
 @dataclass
+class Plan:
+    raw: str
+    steps: list[str]
+    files_to_change: list[str]
+    risks: list[str]
+    confidence: float
+    parse_error: Optional[str] = None
+
+    @property
+    def usable(self) -> bool:
+        """A plan with no steps is not worth putting in the next prompt."""
+        return bool(self.steps) and not self.parse_error
+
+    def render(self) -> str:
+        """The plan as it appears in the execution prompt."""
+        lines = ["## Your Plan", ""]
+        lines += [f"{i}. {step}" for i, step in enumerate(self.steps, 1)]
+        if self.files_to_change:
+            joined = ", ".join(self.files_to_change)
+            lines += ["", f"Files you expect to change: {joined}"]
+        if self.risks:
+            lines += ["", "Risks you identified:"]
+            lines += [f"- {risk}" for risk in self.risks]
+        return "\n".join(lines)
+
+
+@dataclass
 class LLMResponse:
     raw: str
     analysis: str
@@ -161,6 +215,7 @@ class LLMResponse:
 SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
 TASK_PROMPT_TEMPLATE = load_prompt("initial", _BUILTIN_TASK_PROMPT)
 RETRY_PROMPT_TEMPLATE = load_prompt("retry", _BUILTIN_RETRY_PROMPT)
+PLAN_PROMPT_TEMPLATE = load_prompt("plan", _BUILTIN_PLAN_PROMPT)
 
 
 # ─────────────────────────────────────────────
@@ -291,9 +346,42 @@ class LLMClient:
             done=bool(data.get("done", False)),
         )
 
-    def initial_request(self, task: str, context_str: str) -> LLMResponse:
+    def _parse_plan(self, raw: str) -> Plan:
+        text = raw.strip()
+        start, end = text.find("{"), text.rfind("}") + 1
+        if start == -1 or end == 0:
+            return Plan(raw, [], [], [], 0.0, f"No JSON object in plan: {raw[:200]}")
+        try:
+            data = json.loads(text[start:end])
+        except json.JSONDecodeError as exc:
+            return Plan(raw, [], [], [], 0.0, f"Plan JSON parse error: {exc}")
+
+        def as_list(key):
+            value = data.get(key) or []
+            return [str(v) for v in value] if isinstance(value, list) else []
+
+        return Plan(
+            raw=raw,
+            steps=as_list("plan"),
+            files_to_change=as_list("files_to_change"),
+            risks=as_list("risks"),
+            confidence=float(data.get("confidence", 0.5)),
+        )
+
+    def plan_request(self, task: str, context_str: str) -> Plan:
+        """Ask for an approach before any code is written."""
+        prompt = PLAN_PROMPT_TEMPLATE.format(task=task, context=context_str)
+        return self._parse_plan(self._call(prompt))
+
+    def initial_request(
+        self, task: str, context_str: str, plan: Optional["Plan"] = None
+    ) -> LLMResponse:
         """First-pass: analyze task and produce code changes."""
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
+        if plan is not None and plan.usable:
+            # Appended rather than templated in, so the execution prompt is
+            # byte-identical when planning is off.
+            prompt = f"{prompt}\n{plan.render()}\n"
         raw = self._call(prompt)
         return self._parse_response(raw)
 

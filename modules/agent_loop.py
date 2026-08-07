@@ -42,6 +42,7 @@ class AgentConfig:
     interactive: bool = False   # pause for review after tests pass, before commit
 
     # Execution
+    plan_first: bool = False               # ask for an approach before coding
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
     run_file: Optional[str] = None         # run a specific file instead of tests
@@ -295,7 +296,31 @@ class AutonomousAgent:
             # ── Step 3: Call LLM ──
             try:
                 if iteration == 1 or not last_exec:
-                    llm_resp: LLMResponse = self.llm.initial_request(cfg.task, context_str)
+                    plan = None
+                    if cfg.plan_first and iteration == 1:
+                        # Only on the first iteration. Later ones already carry
+                        # the strongest possible signal -- real test output --
+                        # and re-planning against it would cost a call to
+                        # restate what the failure already says.
+                        plan = self.llm.plan_request(cfg.task, context_str)
+                        if plan.usable:
+                            self.logger.info(
+                                f"  Plan ({len(plan.steps)} steps, "
+                                f"confidence {plan.confidence:.2f}):"
+                            )
+                            for number, step in enumerate(plan.steps, 1):
+                                self.logger.info(f"    {number}. {step}")
+                            for risk in plan.risks:
+                                self.logger.warning(f"    risk: {risk}")
+                        else:
+                            self.logger.warning(
+                                f"  Planning pass unusable "
+                                f"({plan.parse_error or 'no steps returned'}); "
+                                f"continuing without it."
+                            )
+                    llm_resp: LLMResponse = self.llm.initial_request(
+                        cfg.task, context_str, plan=plan
+                    )
                 else:
                     llm_resp = self.llm.retry_request(
                         task=cfg.task,

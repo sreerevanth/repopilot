@@ -72,6 +72,9 @@ Examples:
                         help="Execution timeout in seconds (default: 120)")
 
     # Loop control
+    parser.add_argument("--plan-first", action="store_true",
+                        help="Ask the model for an approach before it writes code. "
+                             "Costs one extra API call on the first iteration.")
     parser.add_argument("--max-iter", type=int, default=5,
                         help="Maximum number of agent iterations (default: 5)")
 
@@ -180,6 +183,7 @@ def main():
         interactive=args.interactive,
 
         # Execution
+        plan_first=args.plan_first,
         test_runner=args.runner,
         test_args=args.runner_args,
         run_file=args.run_file,
