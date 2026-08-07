@@ -96,6 +96,10 @@ class AutonomousAgent:
         self.branch_name: Optional[str] = None
         self.pr_url: Optional[str] = None
 
+        # Mirrors the loop's local `last_apply_results`. run() needs it to roll
+        # back after a KeyboardInterrupt, which unwinds past the local.
+        self._applied: list = []
+
         # Resolve paths
         cfg = self.config
         self.backup_dir = os.path.abspath(os.path.join(cfg.repo_root, cfg.backup_dir))
@@ -201,6 +205,56 @@ class AutonomousAgent:
         return commit.success
 
     def run(self) -> AgentRunResult:
+        """
+        Execute the agent loop, rolling back applied files if interrupted.
+
+        Ctrl+C during `apply_changes` used to unwind straight out of the loop,
+        past the rollback at the end of `_run`, leaving half-written files in
+        the working tree. The body is delegated so the interrupt can be caught
+        here and the same rollback applied.
+        """
+        try:
+            return self._run()
+        except KeyboardInterrupt:
+            return self._handle_interrupt()
+
+    def _handle_interrupt(self) -> AgentRunResult:
+        """Restore backed-up files after Ctrl+C and report an aborted run."""
+        self.logger.warning("\n  Interrupted. Rolling back applied changes...")
+
+        restored: list[str] = []
+        if self._applied:
+            try:
+                restored = self.modifier.rollback(self._applied)
+                self.logger.info(f"  Restored {len(restored)} file(s): {restored}")
+            except Exception as exc:
+                # Report rather than mask the interrupt with a second failure.
+                self.logger.error(f"  Rollback failed after interrupt: {exc}")
+        else:
+            self.logger.info("  No files had been modified yet; nothing to restore.")
+
+        self._applied = []
+
+        try:
+            self.logger.finish_run("aborted", self.branch_name, None)
+        except Exception:  # pragma: no cover - logging must not mask the abort
+            pass
+
+        return AgentRunResult(
+            run_id=self.run_id,
+            outcome="aborted",
+            branch_name=self.branch_name,
+            pr_url=None,
+            iterations_used=0,
+            final_message=(
+                f"Interrupted by user. Rolled back {len(restored)} file(s); "
+                f"the working tree is back to its pre-run state."
+                if restored else
+                "Interrupted by user. No file changes needed rolling back."
+            ),
+        )
+
+    def _run(self) -> AgentRunResult:
         cfg = self.config
         self.logger.start_run(cfg.task, cfg.repo_root)
 
@@ -365,6 +419,7 @@ class AutonomousAgent:
                 self.logger.log_apply_results(apply_results)
                 last_changes = valid_changes
                 last_apply_results = apply_results
+                self._applied = apply_results
 
                 iter_record.apply_results = [
                     {"path": r.path, "action": r.action, "success": r.success, "error": r.error}
@@ -381,6 +436,7 @@ class AutonomousAgent:
                 self.logger.info("  No file changes from LLM this iteration.")
                 last_changes = []
                 last_apply_results = []
+                self._applied = []
 
             # ── Early exit if LLM says done (optional) ──
             if cfg.success_on_llm_done and llm_resp.done and llm_resp.confidence >= 0.8:
