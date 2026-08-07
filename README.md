@@ -254,6 +254,38 @@ return MAX_RETRIES
 
 ---
 
+## Container Hardening
+
+`DockerSandbox` runs each container with `--cap-drop ALL`,
+`--security-opt no-new-privileges`, a `--pids-limit` (256 by default) and, on
+POSIX hosts, `--user $(id -u):$(id -g)`.
+
+`--user` matters beyond privilege reduction: the workspace is a read-write bind
+mount, and bind mounts preserve UIDs, so a root container leaves root-owned
+files inside the user's own project. It is omitted on Windows and macOS, where
+`os.getuid` does not exist and Docker Desktop maps bind-mount ownership itself.
+
+Because `--user` leaves the process without a passwd entry, the container also
+gets a `--tmpfs /tmp` with `HOME` pointing at it — otherwise pytest's cache,
+npm and go all fail on an unwritable home.
+
+```python
+DockerSandbox(repo, pids_limit=1024)   # parallel runners on a large machine
+DockerSandbox(repo, read_only=True)    # read-only root filesystem
+```
+
+`read_only` is off by default: it breaks any runner that writes outside
+`/workspace` and `/tmp`. The workspace mount itself stays read-write, which is
+deliberate — plenty of suites create fixtures beside their tests.
+
+To check the flags against a real daemon rather than trusting the argv:
+
+```bash
+python scripts/verify_docker_sandbox.py
+```
+
+---
+
 ## Failure Cases & Mitigations
 
 | Failure                      | Cause                               | Mitigation                                                     |
