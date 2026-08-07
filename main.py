@@ -139,6 +139,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        provider=args.provider,
     )
 
     try:
