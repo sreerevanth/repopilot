@@ -16,6 +16,7 @@ import sys
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.notify import notify_run_complete
 from modules.code_modifier import CodeModificationEngine
@@ -46,7 +47,8 @@ Examples:
         """
     )
 
-    parser.add_argument("--repo", required=True, help="Path to the git repository")
+    parser.add_argument("--repo", required=False,
+                        help="Path to the git repository (not needed with --update)")
     parser.add_argument("--task", required=False, help="High-level task description, or a GitHub issue URL to pull one from (can also be provided via AGENT_TASK env var)")
 
     # Execution
@@ -99,6 +101,10 @@ Examples:
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
+    parser.add_argument("--update", action="store_true",
+                        help="Fast-forward RepoPilot's own checkout to the latest "
+                             "upstream commit. Refuses on a dirty tree or a diverged "
+                             "branch, and never installs packages for you.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
     # API key
@@ -136,6 +142,15 @@ def write_github_output(outputs: dict[str, str]):
 
 def main():
     args = parse_args()
+
+    if args.update:
+        sys.exit(run_update(assume_yes=args.yes))
+
+    if not args.repo:
+        print(
+            "ERROR: --repo is required (except with --update).", file=sys.stderr
+        )
+        sys.exit(2)
 
     # Configuration file support (#22)
     config_file = args.config or os.path.join(args.repo or ".", ".repopilot.json")
