@@ -43,11 +43,21 @@ class ExecutionResult:
         return "\n".join(lines)
 
 
+# `npx --no-install` resolves the project's own node_modules/.bin and fails if the
+# package is absent, rather than downloading it. That matters here: the sandbox
+# is meant to be hermetic, and a runner that silently fetches from the registry
+# would defeat DockerSandbox's --network=none and surprise offline users.
+#
+# vitest is invoked as `vitest run` on purpose. Bare `vitest` starts a watch
+# server when it thinks it is interactive; under this sandbox it would hold the
+# process open until timeout_seconds elapsed and be reported as a test timeout.
 ALLOWED_RUNNERS = {
     "python": [sys.executable],
     "pytest": [sys.executable, "-m", "pytest"],
     "node": ["node"],
     "npm_test": ["npm", "test", "--"],
+    "vitest": ["npx", "--no-install", "vitest", "run"],
+    "jest": ["npx", "--no-install", "jest"],
     "bash": ["bash"],
     "make": ["make"],
     "go": ["go", "test", "./..."],
@@ -61,6 +71,8 @@ DOCKER_RUNNERS = {
     "pytest": ["python", "-m", "pytest"],
     "node": ["node"],
     "npm_test": ["npm", "test", "--"],
+    "vitest": ["npx", "--no-install", "vitest", "run"],
+    "jest": ["npx", "--no-install", "jest"],
     "bash": ["bash"],
     "make": ["make"],
     "go": ["go", "test", "./..."],
