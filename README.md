@@ -211,6 +211,32 @@ through as a literal task would send the agent off to implement a URL.
 
 ---
 
+## Updating RepoPilot
+
+```bash
+python main.py --update
+```
+
+Fast-forwards RepoPilot's own checkout to the latest upstream commit. Fetching
+and then running new code is remote code execution by definition, so this is
+deliberately conservative:
+
+- it updates a **git checkout** rather than unpacking a downloaded archive, so
+  every change is attributable to a commit and reversible with `git reset`
+- it **fast-forwards only** — a diverged local branch is reported, never
+  overwritten
+- it **refuses on a dirty tree**, so nothing uncommitted is lost
+- it **shows the incoming commits and asks** before moving anything (`--yes`
+  skips the prompt)
+- it **prints the pip command rather than running it** when `requirements.txt`
+  changes
+
+`--repo` is not required with `--update`.
+
+---
+
+---
+
 ## Module Reference
 
 ### Module 1 — `repo_ingestion.py`
