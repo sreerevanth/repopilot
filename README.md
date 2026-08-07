@@ -347,6 +347,26 @@ python main.py --repo . --task "Fix the failing parser test"
 
 ---
 
+### `dashboard.py` — run viewer
+
+Renders a run log as a readable timeline — the model's analysis, its file
+changes, and the test output for each iteration:
+
+```bash
+python -m modules.dashboard logs/agent_20260807_abc.jsonl
+python -m modules.dashboard logs/agent_20260807_abc.jsonl --follow
+```
+
+`--follow` tails the log while a run is in progress, so a long run is visible as
+it happens rather than scrolling past in CLI output.
+
+It reads the JSONL `logger.py` already writes rather than being instrumented
+into the loop. That keeps it decoupled: it works on a finished run, on a run in
+another terminal, and needs no changes to `agent_loop.py`. It also means no web
+server and no new dependency. Colour is disabled off a tty and by `NO_COLOR`.
+
+---
+
 ## Execution Loop Detail
 
 ```
