@@ -38,6 +38,7 @@ class AgentConfig:
     repo_root: str
     task: str
     dry_run: bool = False
+    yes: bool = False
 
     # Execution
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
@@ -296,7 +297,7 @@ class AutonomousAgent:
                         pr_url=None,
                     )
 
-                if not ask_confirmation(len(llm_resp.changes)):
+                if not (self.config.yes or ask_confirmation(len(llm_resp.changes))):
                     return AgentRunResult(
                         outcome="aborted",
                         run_id=self.run_id,
