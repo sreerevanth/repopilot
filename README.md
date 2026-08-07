@@ -147,7 +147,7 @@ python demo_run.py /path/to/sample_repo
 ```
 --repo          Path to git repository (required)
 --task          Task description (required)
---runner        Test runner: pytest|npm_test|go|cargo|... (default: pytest)
+--runner        Test runner: pytest|npm_test|vitest|jest|go|cargo|... (default: pytest)
 --runner-args   Extra args for runner
 --run-file      Run a specific file instead of test suite
 --timeout       Sandbox timeout in seconds (default: 120)
@@ -345,6 +345,15 @@ return MAX_RETRIES
 # In sandbox.py, add to ALLOWED_RUNNERS:
 "deno": ["deno", "test"],
 ```
+
+**JavaScript / TypeScript runners:** `vitest` and `jest` go through
+`npx --no-install`, which resolves the target project's own `node_modules/.bin`
+and fails if the package is missing rather than fetching it from the registry —
+so the sandbox stays hermetic and `DockerSandbox`'s `--network=none` is not
+quietly bypassed. Install the runner as a dev dependency of the repo under test
+first. `vitest` is invoked as `vitest run`: bare `vitest` starts a watch server
+when it believes it is interactive, which under the sandbox would sit until
+`timeout_seconds` elapsed and be reported as a test timeout.
 
 **Add a new file type to context scoring:**
 
