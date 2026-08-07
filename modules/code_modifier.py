@@ -23,6 +23,66 @@ class ApplyResult:
     error: Optional[str]
 
 
+import re
+
+def _apply_unified_diff(original: str, patch: str) -> str:
+    """Apply a unified diff patch to the original text in pure Python."""
+    original_lines = original.splitlines(keepends=True)
+    patch_lines = patch.splitlines(keepends=True)
+    
+    result_lines = []
+    orig_idx = 0
+    
+    hunk_re = re.compile(r'^@@\s+-(?P<old_start>\d+)(?:,(?P<old_len>\d+))?\s+\+(?P<new_start>\d+)(?:,(?P<new_len>\d+))?\s+@@')
+    
+    patch_idx = 0
+    # Skip diff header lines until the first hunk
+    while patch_idx < len(patch_lines) and not patch_lines[patch_idx].startswith('@@'):
+        patch_idx += 1
+        
+    if patch_idx == len(patch_lines):
+        # No hunks found, treat as full replacement fallback
+        return patch
+        
+    while patch_idx < len(patch_lines):
+        match = hunk_re.match(patch_lines[patch_idx])
+        if not match:
+            patch_idx += 1
+            continue
+            
+        old_start = int(match.group('old_start'))
+        # Adjust 1-based index to 0-based
+        old_start = max(0, old_start - 1)
+        
+        # Copy original lines up to the start of this hunk
+        result_lines.extend(original_lines[orig_idx:old_start])
+        orig_idx = old_start
+        
+        patch_idx += 1
+        # Process hunk lines
+        while patch_idx < len(patch_lines) and not patch_lines[patch_idx].startswith('@@'):
+            line = patch_lines[patch_idx]
+            patch_idx += 1
+            if line.startswith(' '):
+                # Context line: verify and copy
+                if orig_idx < len(original_lines):
+                    result_lines.append(original_lines[orig_idx])
+                    orig_idx += 1
+            elif line.startswith('-'):
+                # Deletion line: verify and skip original line
+                if orig_idx < len(original_lines):
+                    orig_idx += 1
+            elif line.startswith('+'):
+                # Addition line: append new line
+                result_lines.append(line[1:])
+                
+    # Copy any remaining original lines
+    if orig_idx < len(original_lines):
+        result_lines.extend(original_lines[orig_idx:])
+        
+    return "".join(result_lines)
+
+
 class CodeModificationEngine:
     def __init__(self, repo_root: str, backup_dir: str):
         self.repo_root = os.path.abspath(repo_root)
@@ -87,12 +147,12 @@ class CodeModificationEngine:
                     success=True, backup_path=backup_path, error=None
                 )
 
-            elif change.action in ("modify", "create"):
-                if not change.content and change.action == "modify":
+            elif change.action in ("modify", "create", "patch"):
+                if not change.content and change.action in ("modify", "patch"):
                     return ApplyResult(
                         path=change.path, action=change.action,
                         success=False, backup_path=None,
-                        error="LLM returned empty content for modify action"
+                        error=f"LLM returned empty content for {change.action} action"
                     )
 
                 # Backup existing file
@@ -101,9 +161,19 @@ class CodeModificationEngine:
                 # Ensure parent dirs exist
                 os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-                # Write new content
-                with open(abs_path, "w", encoding="utf-8") as fh:
-                    fh.write(change.content)
+                if change.action == "patch":
+                    # Load original text if file exists, else empty
+                    original_text = ""
+                    if os.path.exists(abs_path):
+                        with open(abs_path, "r", encoding="utf-8") as fh:
+                            original_text = fh.read()
+                    patched_content = _apply_unified_diff(original_text, change.content)
+                    with open(abs_path, "w", encoding="utf-8") as fh:
+                        fh.write(patched_content)
+                else:
+                    # Write new content
+                    with open(abs_path, "w", encoding="utf-8") as fh:
+                        fh.write(change.content)
 
                 return ApplyResult(
                     path=change.path, action=change.action,
@@ -158,9 +228,9 @@ class CodeModificationEngine:
             if not change.path:
                 errors.append("Change has empty path")
                 continue
-            if change.action not in ("modify", "create", "delete"):
+            if change.action not in ("modify", "create", "delete", "patch"):
                 errors.append(f"Invalid action '{change.action}' for {change.path}")
-            if change.action in ("modify", "create") and not change.content:
+            if change.action in ("modify", "create", "patch") and not change.content:
                 errors.append(f"Empty content for {change.action} on {change.path}")
             try:
                 self._safe_abs_path(change.path)
