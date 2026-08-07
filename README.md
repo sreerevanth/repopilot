@@ -252,6 +252,18 @@ through as a literal task would send the agent off to implement a URL.
 - `initial_request()` for first pass; `retry_request()` for error-fed retries.
 - Parses `FileChange[]` from JSON; gracefully handles malformed output.
 
+#### Streaming
+
+Responses stream by default, so a 20-30 second call shows progress instead of
+sitting silent. Only a character count is echoed, and only to a tty — the
+response is one JSON object whose largest field is complete file contents, so
+printing the deltas verbatim would dump the rewritten source into the terminal.
+
+The text is reassembled and parsed as a single object at the end. Deltas split
+wherever the API decides, including mid-token, so incremental parsing would be
+fragile for no real gain. `LLMClient(stream=False)` restores the blocking call,
+and an SDK without `messages.stream()` falls back to it automatically.
+
 ### Module 4 — `code_modifier.py`
 
 - Validates paths (prevents directory traversal).
@@ -262,41 +274,9 @@ through as a literal task would send the agent off to implement a URL.
 ### Module 5 — `sandbox.py`
 
 - `SubprocessSandbox`: runs commands via `subprocess.run()` with timeout, output
-  capture, and environment sanitization.
+  capture, and environment sanitization (blocks cloud credentials from leaking).
 - `DockerSandbox`: wraps Docker with `--network=none`, memory/CPU caps, read-only
   volume mount. Falls back to subprocess if Docker is unavailable.
-
-#### Environment sanitization
-
-The sandbox executes code the model wrote, so the environment it receives is an
-**allowlist**: only the variables named in `ALLOWED_ENV_VARS` reach the child
-process, and everything else is dropped. A denylist would only cover the names
-somebody thought of, leaving every newly adopted service unprotected by default.
-
-The allowlist covers what the runners actually need — `PATH`, `HOME`, locale and
-temp dirs, the Windows core (`SYSTEMROOT`, `COMSPEC`, …), and the Python, Node,
-Go, Rust, Ruby, Java and Docker-client toolchain variables. Credentials such as
-`ANTHROPIC_API_KEY`, `SSH_AUTH_SOCK` and `KUBECONFIG` are not on it, and neither
-are the GitHub Actions runner variables: `GITHUB_ENV` and `GITHUB_PATH` name
-writable files that inject state into later workflow steps.
-
-If a runner needs a variable that is not covered, add it at runtime rather than
-widening the defaults:
-
-```bash
-# comma-separated; logged whenever it takes effect
-export REPOPILOT_SANDBOX_ENV_PASSTHROUGH=GOPROXY,npm_config_registry
-```
-
-Set the log level to `DEBUG` to see exactly which variables were stripped from a
-given run (names only — values are never logged).
-
-> **Scope.** This closes the easiest exfiltration path, not every path. In
-> subprocess mode the filesystem is not isolated, so `~/.aws/credentials` and
-> `~/.npmrc` remain readable; use `DockerSandbox` for genuinely untrusted code.
-> Dropping `SSH_AUTH_SOCK` is the exception that is decisive on its own — a
-> forwarded agent socket signs with the private key without ever reading it, so
-> file permissions cannot help there.
 
 ### Module 6 — `agent_loop.py` (CORE)
 
@@ -383,7 +363,6 @@ return MAX_RETRIES
 | ---------------------------- | ----------------------------------- | -------------------------------------------------------------- |
 | `JSONDecodeError` from LLM   | Model adds markdown fences or prose | Regex strips fences; parse error fed back as context next iter |
 | Path traversal in LLM output | LLM outputs `../../etc/passwd`      | `_safe_abs_path()` validates all paths against repo root       |
-| Credentials reach LLM code   | Child process inherits `os.environ` | `_build_safe_env()` allowlist; only named toolchain vars pass  |
 | Empty content for modify     | LLM returns `""` for file content   | Validation rejects before apply; error logged                  |
 | Infinite test loop           | Test hangs                          | `timeout_seconds` in sandbox kills process                     |
 | Repo too large               | Monorepo with 10K files             | 8MB total budget + per-file 512KB cap; budget exhausted = skip |
