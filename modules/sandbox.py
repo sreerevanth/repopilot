@@ -346,6 +346,28 @@ class SubprocessSandbox:
         return self.run(cmd + [abs_path])
 
 
+def _docker_user_flags() -> list[str]:
+    """
+    Run the container as the invoking user, on platforms where that means
+    something.
+
+    Without --user the container runs as root over a read-write bind mount of
+    the user's repository. Bind mounts preserve UIDs, so anything the executed
+    code creates lands on the host owned by root -- files inside someone's own
+    project that they cannot edit or delete without sudo.
+
+    os.getuid/os.getgid do not exist on Windows, so the flag is omitted there.
+    That is not a gap being papered over: Docker Desktop on Windows and macOS
+    maps bind-mount ownership itself, so there is no host UID for the container
+    to match and passing one can break the mount instead of securing it.
+    """
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return []
+    return ["--user", f"{getuid()}:{getgid()}"]
+
+
 class DockerSandbox:
     """
     Docker-based sandbox for untrusted code.
@@ -358,17 +380,68 @@ class DockerSandbox:
         image: str = "python:3.11-slim",
         timeout_seconds: int = 120,
         strict: bool = False,
+        pids_limit: int = 256,
+        read_only: bool = False,
     ):
         """
         `strict=True` raises SandboxUnavailableError instead of falling back to
         an unisolated executor. Use it in CI, where losing isolation should stop
         the run rather than quietly change what the guarantees are.
+
+        `pids_limit` caps process creation; a fork bomb is otherwise bounded
+        only by the memory limit. Raise it for parallel runners that spawn a
+        worker per core (pytest-xdist, jest) on a large machine.
+
+        `read_only` makes the container filesystem read-only apart from the
+        workspace mount and /tmp. Off by default because it breaks any runner
+        that writes outside those paths; see the note in the README.
         """
         self.working_dir = os.path.abspath(working_dir)
         self.image = image
         self.timeout = timeout_seconds
         self.strict = strict
+        self.pids_limit = pids_limit
+        self.read_only = read_only
         self._docker_available = _docker_is_usable()
+
+    def _build_docker_command(self, inner_cmd: list[str]) -> list[str]:
+        """
+        Assemble the `docker run` argv.
+
+        Split out from run_tests so the flag set can be asserted on directly --
+        a security control that is only exercised when a daemon happens to be
+        present is a control nobody checks.
+        """
+        cmd = [
+            "docker", "run", "--rm",
+            "--network=none",
+            "--memory=512m",
+            "--cpus=1",
+            # Drop everything the container does not need. A test runner needs
+            # no Linux capabilities, and no-new-privileges stops a setuid binary
+            # inside the image from regaining any.
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            f"--pids-limit={self.pids_limit}",
+        ]
+        cmd += _docker_user_flags()
+
+        if self.read_only:
+            cmd.append("--read-only")
+
+        # --user leaves the process without a passwd entry, so HOME is unset and
+        # anything that wants a writable home -- pytest's cache, npm, go's build
+        # cache -- fails in confusing ways. A tmpfs at /tmp plus HOME pointing at
+        # it restores that without granting any access to the host.
+        cmd += [
+            "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+            "-e", "HOME=/tmp",
+            "-v", f"{self.working_dir}:/workspace:rw",
+            "-w", "/workspace",
+            self.image,
+            "sh", "-c", shlex.join(inner_cmd),
+        ]
+        return cmd
 
     def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
         if not self._docker_available:
@@ -388,17 +461,7 @@ class DockerSandbox:
 
         runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
         inner_cmd = runner_cmd + (extra_args or [])
-
-        docker_cmd = [
-            "docker", "run", "--rm",
-            "--network=none",
-            "--memory=512m",
-            "--cpus=1",
-            "-v", f"{self.working_dir}:/workspace:rw",
-            "-w", "/workspace",
-            self.image,
-            "sh", "-c", shlex.join(inner_cmd),
-        ]
+        docker_cmd = self._build_docker_command(inner_cmd)
 
         sb = SubprocessSandbox(self.working_dir, self.timeout)
         result = sb.run(docker_cmd)
