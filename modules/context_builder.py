@@ -72,7 +72,7 @@ def _extract_keywords(task: str) -> list[str]:
         "the", "a", "an", "in", "to", "of", "and", "or", "is", "it",
         "for", "on", "with", "this", "that", "are", "be", "was", "as",
         "at", "by", "from", "but", "not", "have", "has", "do", "does",
-        "fix", "add", "update", "change", "make", "please", "should",
+        "please", "should",
         "need", "want", "can", "could", "would", "will", "may", "might",
     }
     tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", task.lower())
