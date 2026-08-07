@@ -16,6 +16,7 @@ import sys
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.code_modifier import CodeModificationEngine
 
@@ -40,7 +41,8 @@ Examples:
         """
     )
 
-    parser.add_argument("--repo", required=True, help="Path to the git repository")
+    parser.add_argument("--repo", required=False,
+                        help="Path to the git repository (not needed with --update)")
     parser.add_argument("--task", required=False, help="High-level task description (can also be provided via AGENT_TASK env var)")
 
     # Execution
@@ -85,19 +87,15 @@ Examples:
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
+    parser.add_argument("--update", action="store_true",
+                        help="Fast-forward RepoPilot's own checkout to the latest "
+                             "upstream commit. Refuses on a dirty tree or a diverged "
+                             "branch, and never installs packages for you.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
-
-    # LLM provider
-    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "ollama"],
-                        help="LLM provider (default: anthropic)")
-    parser.add_argument("--model", default=None,
-                        help="Model name. Defaults per provider: claude-sonnet-4 / llama3")
-    parser.add_argument("--ollama-host", default=None,
-                        help="Ollama base URL (default: http://localhost:11434)")
 
     # API key
     parser.add_argument("--api-key", default=None,
-                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var). Unused with --provider ollama")
+                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
@@ -123,6 +121,15 @@ def write_github_output(outputs: dict[str, str]):
 
 def main():
     args = parse_args()
+
+    if args.update:
+        sys.exit(run_update(assume_yes=args.yes))
+
+    if not args.repo:
+        print(
+            "ERROR: --repo is required (except with --update).", file=sys.stderr
+        )
+        sys.exit(2)
 
     repo_root = os.path.abspath(args.repo)
     if args.rollback:
@@ -172,9 +179,6 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
-        llm_provider=args.provider,
-        llm_model=args.model,
-        ollama_host=args.ollama_host,
     )
 
     try:
