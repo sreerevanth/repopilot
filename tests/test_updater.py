@@ -88,6 +88,35 @@ def test_a_plain_directory_is_not(tmp_path):
     assert is_git_checkout(str(plain)) is False
 
 
+def test_a_directory_nested_in_another_repo_is_not_a_checkout(tmp_path):
+    """
+    `git rev-parse --is-inside-work-tree` walks *up*, so it answers "true" for
+    any directory inside a repository. This surfaced on a Windows machine where
+    a git repo sat above the temp directory: the "not a checkout" refusal never
+    fired, and --update would have fast-forwarded that ancestor repo instead of
+    RepoPilot.
+    """
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    git(outer, "init", "-q")
+    git(outer, "config", "user.email", "o@example.com")
+    git(outer, "config", "user.name", "Other")
+    (outer / "f.txt").write_text("unrelated\n")
+    git(outer, "add", "-A")
+    git(outer, "commit", "-qm", "unrelated repo")
+
+    nested = outer / "sub" / "not-a-repo"
+    nested.mkdir(parents=True)
+
+    assert is_git_checkout(str(nested)) is False
+    assert check_for_updates(root=str(nested)).ok is False
+    assert apply_update(root=str(nested)).ok is False
+
+
+def test_the_repo_root_itself_is_a_checkout(install):
+    assert is_git_checkout(str(install)) is True
+
+
 def test_a_non_checkout_is_refused(tmp_path):
     """Downloading a tarball over it is not an acceptable fallback."""
     plain = tmp_path / "not-a-repo"
