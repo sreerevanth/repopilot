@@ -90,6 +90,10 @@ Examples:
     parser.add_argument("--api-key", default=None,
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
+    # Non-interactive / CI
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Auto-approve file changes (bypass confirmation prompt)")
+
     return parser.parse_args()
 
 
@@ -108,10 +112,13 @@ def main():
         print(f"ERROR: Repository path does not exist: {repo_root}", file=sys.stderr)
         sys.exit(1)
 
+    yes_flag = args.yes or os.environ.get("CI") == "true"
+
     config = AgentConfig(
         repo_root=repo_root,
         task=args.task,
         dry_run=args.dry_run,
+        yes=yes_flag,
 
         # Execution
         test_runner=args.runner,
