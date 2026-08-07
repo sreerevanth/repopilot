@@ -22,7 +22,7 @@ from typing import Optional
 
 from modules.repo_ingestion import ingest_repository, Repository
 from modules.context_builder import build_context
-from modules.llm_client import LLMClient, LLMResponse, FileChange
+from modules.llm_client import create_llm_client, LLMResponse, FileChange
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
@@ -66,6 +66,9 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    llm_provider: str = "anthropic"        # anthropic | ollama
+    llm_model: Optional[str] = None        # provider default when unset
+    ollama_host: Optional[str] = None      # default http://localhost:11434
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -98,7 +101,12 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(api_key=cfg.anthropic_api_key)
+        self.llm = create_llm_client(
+            provider=cfg.llm_provider,
+            api_key=cfg.anthropic_api_key,
+            model=cfg.llm_model,
+            host=cfg.ollama_host,
+        )
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 

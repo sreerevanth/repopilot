@@ -8,6 +8,8 @@ import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
@@ -19,6 +21,11 @@ except ImportError:
 
 MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
+
+# Ollama defaults. The host is overridable because Ollama is commonly run on a
+# second machine with a GPU rather than the laptop driving the agent.
+OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+OLLAMA_DEFAULT_MODEL = "llama3"
 
 # ─────────────────────────────────────────────
 # Prompt Templates
@@ -122,34 +129,20 @@ class LLMResponse:
 # Client
 # ─────────────────────────────────────────────
 
-class LLMClient:
-    def __init__(self, api_key: Optional[str] = None):
-        if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            )
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
-        self.client = anthropic.Anthropic(api_key=key)
+class BaseLLMClient:
+    """Provider-agnostic half of the client.
+
+    Everything that is not an HTTP call lives here: prompt construction, the
+    markdown-fence stripping, JSON extraction and the recovery path when a model
+    returns something unparseable. Those behaviours took real effort to get right
+    and are worth *more* for a local model, not less — a 8B model wrapping its
+    JSON in prose is exactly what `_parse_response` already handles.
+
+    A provider supplies `_call(prompt) -> str` and inherits the rest.
+    """
 
     def _call(self, prompt: str, retries: int = 3) -> str:
-        """Raw API call with retry on transient errors."""
-        for attempt in range(retries):
-            try:
-                response = self.client.messages.create(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.content[0].text
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise
-                wait = 2 ** attempt
-                time.sleep(wait)
-        raise RuntimeError("LLM call failed after retries")
+        raise NotImplementedError("Subclasses must implement _call()")
 
     def _parse_response(self, raw: str) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
@@ -224,3 +217,134 @@ class LLMClient:
         )
         raw = self._call(prompt)
         return self._parse_response(raw)
+
+
+class AnthropicLLMClient(BaseLLMClient):
+    """Anthropic provider. Unchanged behaviour from the original LLMClient."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = MODEL):
+        if not _ANTHROPIC_AVAILABLE:
+            raise RuntimeError(
+                "anthropic package not installed. Run: pip install anthropic"
+            )
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        self.client = anthropic.Anthropic(api_key=key)
+        self.model = model
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        """Raw API call with retry on transient errors."""
+        for attempt in range(retries):
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.content[0].text
+            except Exception:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+        raise RuntimeError("LLM call failed after retries")
+
+
+class OllamaLLMClient(BaseLLMClient):
+    """Local models via Ollama's HTTP API.
+
+    Uses urllib rather than the `ollama` or `requests` packages, matching the
+    choice already made in git_integration.py for the GitHub API — running
+    offline should not require installing anything beyond Ollama itself.
+    """
+
+    def __init__(
+        self,
+        model: str = OLLAMA_DEFAULT_MODEL,
+        host: str = OLLAMA_DEFAULT_HOST,
+        timeout: int = 300,
+    ):
+        self.model = model
+        self.host = host.rstrip("/")
+        # Generous default: a 70B model on CPU can take minutes for one
+        # response, and a timeout here discards work the loop cannot recover.
+        self.timeout = timeout
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        payload = json.dumps({
+            "model": self.model,
+            "prompt": prompt,
+            "system": SYSTEM_PROMPT,
+            "stream": False,
+            "options": {
+                # Low temperature: the loop needs parseable JSON, not variety.
+                "temperature": 0.1,
+                "num_predict": MAX_TOKENS,
+            },
+        }).encode("utf-8")
+
+        last_error: Optional[Exception] = None
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(
+                    f"{self.host}/api/generate",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return body.get("response", "")
+            except urllib.error.HTTPError as e:
+                # A 404 means the model is not pulled. Retrying cannot fix that,
+                # so fail immediately with the command that will.
+                if e.code == 404:
+                    raise RuntimeError(
+                        f"Ollama has no model named '{self.model}'. "
+                        f"Pull it first: ollama pull {self.model}"
+                    ) from e
+                last_error = e
+            except urllib.error.URLError as e:
+                # Connection refused on the first attempt almost always means
+                # the daemon is not running; say so rather than retrying blindly.
+                if attempt == 0 and isinstance(e.reason, ConnectionRefusedError):
+                    raise RuntimeError(
+                        f"Cannot reach Ollama at {self.host}. Is it running? "
+                        f"Start it with: ollama serve"
+                    ) from e
+                last_error = e
+            except Exception as e:
+                last_error = e
+
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+
+        raise RuntimeError(f"Ollama call failed after {retries} attempts: {last_error}")
+
+
+def create_llm_client(
+    provider: str = "anthropic",
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    host: Optional[str] = None,
+) -> BaseLLMClient:
+    """Build a client for the named provider."""
+    provider = (provider or "anthropic").lower()
+
+    if provider == "anthropic":
+        return AnthropicLLMClient(api_key=api_key, model=model or MODEL)
+    if provider == "ollama":
+        return OllamaLLMClient(
+            model=model or OLLAMA_DEFAULT_MODEL,
+            host=host or OLLAMA_DEFAULT_HOST,
+        )
+
+    raise ValueError(
+        f"Unknown LLM provider: '{provider}'. Supported: anthropic, ollama"
+    )
+
+
+# Backwards compatibility: LLMClient was the Anthropic client, and existing
+# callers (including tests and any downstream forks) construct it directly.
+LLMClient = AnthropicLLMClient
