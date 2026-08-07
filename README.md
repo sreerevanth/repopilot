@@ -160,7 +160,28 @@ python demo_run.py /path/to/sample_repo
 --log-dir       Log output dir (default: logs/)
 --backup-dir    Backup dir (default: backups/)
 --quiet         Suppress verbose output
+--yes, -y       Auto-approve changes (bypasses every prompt; implied by CI=true)
+--interactive   After tests pass, print the diff and confirm before committing
 ```
+
+### Reviewing before a commit
+
+By default the agent commits as soon as the suite goes green. `--interactive`
+inserts a review gate at that point — it prints the working-tree diff the agent
+produced and asks:
+
+```
+Commit these 3 change(s)? [Y/n]:
+```
+
+Declining leaves the changes on disk, uncommitted and unpushed, so they can be
+inspected and committed by hand — or discarded with `--rollback`. The run exits
+with outcome `aborted`.
+
+This is distinct from the existing prompt, which fires _before_ files are
+written and shows a manifest of paths rather than a diff. `--yes` (and `CI=true`,
+which sets it automatically) bypasses both, so unattended runs never block on
+stdin.
 
 ---
 

@@ -94,6 +94,9 @@ Examples:
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
+    parser.add_argument("--interactive", "-i", action="store_true",
+                        help="After tests pass, show the diff and confirm before "
+                             "committing. Ignored when --yes is set or CI=true.")
 
     return parser.parse_args()
 
@@ -137,6 +140,7 @@ def main():
         task=task,
         dry_run=args.dry_run,
         yes=yes_flag,
+        interactive=args.interactive,
 
         # Execution
         test_runner=args.runner,

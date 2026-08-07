@@ -48,10 +48,15 @@ def save_manifest(changes: list, log_dir: str, run_id: str) -> str:
     return path
 
 
-def ask_confirmation(n: int) -> bool:
-    """Prompt user to confirm before applying changes. Returns True if approved."""
+def ask_confirmation(n: int, action: str = "Apply") -> bool:
+    """
+    Prompt the user to confirm an action on n changes. Returns True if approved.
+
+    `action` is the verb shown in the prompt. It defaults to "Apply" so the
+    existing pre-apply prompt is unchanged; --interactive passes "Commit".
+    """
     try:
-        answer = input(f"\nApply these {n} change(s)? [Y/n]: ").strip().lower()
+        answer = input(f"\n{action} these {n} change(s)? [Y/n]: ").strip().lower()
         return answer not in ("n", "no")
     except (KeyboardInterrupt, EOFError):
         print("\nAborted.")
