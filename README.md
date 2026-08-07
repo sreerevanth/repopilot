@@ -177,6 +177,13 @@ python demo_run.py /path/to/sample_repo
 - Scores every file against the task using: language priority, path keyword match,
   content keyword frequency, entry-point bonus, import graph hints.
 - Fills a configurable character budget (~60K chars / ~15K tokens).
+- A Python file too large to include whole is reduced to a signature-only
+  outline — imports, constants, class fields and `def` lines with their
+  annotations, bodies omitted — instead of being dropped. That costs roughly a
+  seventh of the space, so the model still learns the module exists and what it
+  exposes. Outlined files are flagged in `BuiltContext.outlined` and carry an
+  `# OUTLINE ONLY` header. Non-Python files are not outlined; that would need
+  tree-sitter.
 - Returns `BuiltContext.render()` — XML-tagged source ready for the LLM prompt.
 
 ### Module 3 — `llm_client.py`

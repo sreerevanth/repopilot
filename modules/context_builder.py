@@ -4,9 +4,10 @@ Selects the most relevant files for a task without sending the entire repo.
 Uses keyword matching, file type priority, import graph hints, and scoring.
 """
 
+import ast
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -36,6 +37,7 @@ class BuiltContext:
     files: list[FileRecord]
     total_chars: int
     scoring_details: list[ScoredFile]
+    outlined: list[str] = field(default_factory=list)
 
     def render(self) -> str:
         """Render context as a single string suitable for an LLM prompt."""
@@ -50,12 +52,132 @@ class BuiltContext:
 
     def summary(self) -> str:
         lines = [f"Context: {len(self.files)} files, {self.total_chars} chars"]
+        if self.outlined:
+            lines.append(
+                f"  outline-only ({len(self.outlined)}): {', '.join(self.outlined)}"
+            )
         for scored_file in self.scoring_details[:5]:
             lines.append(
                 f"  [{scored_file.score:.1f}] {scored_file.record.path} - "
                 f"{', '.join(scored_file.reasons)}"
             )
         return "\n".join(lines)
+
+
+OUTLINE_HEADER = (
+    "# OUTLINE ONLY - signatures shown, bodies omitted to fit the context budget."
+)
+
+
+def _signature(node) -> str:
+    """Render a def/class header without its body."""
+    prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+
+    if isinstance(node, ast.ClassDef):
+        bases = [ast.unparse(b) for b in node.bases]
+        bases += [ast.unparse(k) for k in node.keywords]
+        suffix = f"({', '.join(bases)})" if bases else ""
+        return f"class {node.name}{suffix}:"
+
+    returns = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+    return f"{prefix} {node.name}({ast.unparse(node.args)}){returns}: ..."
+
+
+def _decorators(node, indent: str) -> list[str]:
+    return [f"{indent}@{ast.unparse(d)}" for d in node.decorator_list]
+
+
+def extract_outline(source: str, path: str) -> Optional[str]:
+    """
+    Reduce a Python file to its imports, constants and signatures.
+
+    Used when a file scores well enough to matter but is too large to include
+    whole. The alternative today is dropping it silently, which leaves the model
+    unaware the module exists at all -- worse than an approximate view of it.
+
+    Returns None for non-Python files, unparseable sources, and files with no
+    definitions worth summarising. Other languages would need tree-sitter; that
+    is a separate change and a much heavier dependency.
+    """
+    if not path.endswith(".py"):
+        return None
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        # A file the agent is mid-way through breaking is exactly when this
+        # runs, so a parse failure is expected rather than exceptional.
+        return None
+
+    lines: list[str] = [OUTLINE_HEADER]
+
+    docstring = ast.get_docstring(tree)
+    if docstring:
+        first = docstring.strip().splitlines()[0]
+        lines.append(f'"""{first}"""')
+
+    imports = [
+        ast.unparse(node)
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    if imports:
+        lines.append("")
+        lines.extend(imports)
+
+    constants = [
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id.isupper()
+    ]
+    constants += [
+        node.target.id
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id.isupper()
+    ]
+    if constants:
+        lines.append("")
+        lines.extend(f"{name} = ..." for name in constants)
+
+    found_definition = False
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            found_definition = True
+            lines.append("")
+            lines.extend(_decorators(node, ""))
+            lines.append(_signature(node))
+
+            body: list[str] = []
+            for child in node.body:
+                # Annotated fields are the whole point of a dataclass or a
+                # Protocol, so they belong in the outline alongside methods.
+                is_field = isinstance(child, ast.AnnAssign) and isinstance(
+                    child.target, ast.Name
+                )
+                if is_field:
+                    annotation = ast.unparse(child.annotation)
+                    body.append(f"    {child.target.id}: {annotation}")
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    body.extend(_decorators(child, "    "))
+                    body.append(f"    {_signature(child)}")
+
+            lines.extend(body or ["    ..."])
+
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found_definition = True
+            lines.append("")
+            lines.extend(_decorators(node, ""))
+            lines.append(_signature(node))
+
+    if not found_definition:
+        # Imports and constants alone are not worth a slot in the budget.
+        return None
+
+    return "\n".join(lines) + "\n"
 
 
 def _normalize_repo_path(path: str) -> str:
@@ -177,15 +299,35 @@ def build_context(
             total_chars += len(scored_file.record.content)
             forced_paths.discard(record_path)
 
+    outlined: list[str] = []
+
     for scored_file in scored:
         if scored_file.record in selected:
             continue
         file_chars = len(scored_file.record.content)
+
         if total_chars + file_chars > char_budget:
+            # Too big to include whole. Rather than drop it -- which leaves the
+            # model unaware the module exists -- fall back to its signatures.
+            if scored_file.score <= 0:
+                continue
+            outline = extract_outline(
+                scored_file.record.content, scored_file.record.path
+            )
+            if outline and total_chars + len(outline) <= char_budget:
+                selected.append(replace(scored_file.record, content=outline))
+                total_chars += len(outline)
+                outlined.append(scored_file.record.path)
             continue
+
         if scored_file.score <= 0:
             break
         selected.append(scored_file.record)
         total_chars += file_chars
 
-    return BuiltContext(files=selected, total_chars=total_chars, scoring_details=scored)
+    return BuiltContext(
+        files=selected,
+        total_chars=total_chars,
+        scoring_details=scored,
+        outlined=outlined,
+    )
