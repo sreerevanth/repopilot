@@ -14,6 +14,13 @@ from typing import Optional
 from modules.llm_client import FileChange
 
 
+# "rename" is the canonical name; "move" is accepted because it is the word a
+# model is just as likely to reach for, and rejecting it would send the agent
+# back around the loop for a synonym.
+RENAME_ACTIONS = ("rename", "move")
+VALID_ACTIONS = ("modify", "create", "delete") + RENAME_ACTIONS
+
+
 @dataclass
 class ApplyResult:
     path: str
@@ -21,6 +28,7 @@ class ApplyResult:
     success: bool
     backup_path: Optional[str]
     error: Optional[str]
+    new_path: Optional[str] = None   # destination, for "rename"
 
 
 class CodeModificationEngine:
@@ -110,6 +118,64 @@ class CodeModificationEngine:
                     success=True, backup_path=backup_path, error=None
                 )
 
+            elif change.action in RENAME_ACTIONS:
+                if not change.new_path:
+                    return ApplyResult(
+                        path=change.path, action=change.action,
+                        success=False, backup_path=None,
+                        error=f"'{change.action}' on {change.path} requires 'new_path'"
+                    )
+
+                try:
+                    dest_abs = self._safe_abs_path(change.new_path)
+                except ValueError as e:
+                    return ApplyResult(
+                        path=change.path, action=change.action,
+                        success=False, backup_path=None, error=str(e)
+                    )
+
+                if not os.path.exists(abs_path):
+                    return ApplyResult(
+                        path=change.path, action=change.action,
+                        success=False, backup_path=None,
+                        error=f"Cannot rename missing file: {change.path}"
+                    )
+
+                if os.path.normcase(dest_abs) == os.path.normcase(abs_path):
+                    return ApplyResult(
+                        path=change.path, action=change.action,
+                        success=False, backup_path=None,
+                        error=(
+                            "Rename source and destination are the same: "
+                            f"{change.path}"
+                        )
+                    )
+
+                if os.path.exists(dest_abs):
+                    # Silently clobbering a file the task never mentioned is the
+                    # kind of loss no backup here would cover.
+                    return ApplyResult(
+                        path=change.path, action=change.action,
+                        success=False, backup_path=None,
+                        error=f"Refusing to overwrite existing file: {change.new_path}"
+                    )
+
+                backup_path = self._backup(abs_path, change.path)
+                os.makedirs(os.path.dirname(dest_abs), exist_ok=True)
+                shutil.move(abs_path, dest_abs)
+
+                # A rename may also change the file's contents; omitting
+                # "content" moves it unchanged.
+                if change.content:
+                    with open(dest_abs, "w", encoding="utf-8") as fh:
+                        fh.write(change.content)
+
+                return ApplyResult(
+                    path=change.path, action=change.action,
+                    success=True, backup_path=backup_path, error=None,
+                    new_path=change.new_path
+                )
+
             else:
                 return ApplyResult(
                     path=change.path, action=change.action,
@@ -139,6 +205,17 @@ class CodeModificationEngine:
         """
         restored = []
         for result in results:
+            # A rename left a file at the destination. Restoring the backup to
+            # the original path is not enough on its own -- without this the
+            # revert leaves both copies behind.
+            if result.action in RENAME_ACTIONS and result.new_path:
+                try:
+                    dest_abs = self._safe_abs_path(result.new_path)
+                    if os.path.exists(dest_abs):
+                        os.remove(dest_abs)
+                except Exception:
+                    pass
+
             if result.backup_path and os.path.exists(result.backup_path):
                 try:
                     abs_path = self._safe_abs_path(result.path)
@@ -158,10 +235,20 @@ class CodeModificationEngine:
             if not change.path:
                 errors.append("Change has empty path")
                 continue
-            if change.action not in ("modify", "create", "delete"):
+            if change.action not in VALID_ACTIONS:
                 errors.append(f"Invalid action '{change.action}' for {change.path}")
             if change.action in ("modify", "create") and not change.content:
                 errors.append(f"Empty content for {change.action} on {change.path}")
+            if change.action in RENAME_ACTIONS:
+                if not change.new_path:
+                    errors.append(
+                        f"Missing 'new_path' for {change.action} on {change.path}"
+                    )
+                else:
+                    try:
+                        self._safe_abs_path(change.new_path)
+                    except ValueError as e:
+                        errors.append(f"{change.path}: invalid new_path - {e}")
             try:
                 self._safe_abs_path(change.path)
             except ValueError as e:
