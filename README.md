@@ -268,6 +268,7 @@ return MAX_RETRIES
 | Test runner not found        | `pytest` not installed              | `sandbox.py` checks `shutil.which()`; returns exit_code 127    |
 | All apply ops fail           | Wrong paths, permission error       | Agent breaks loop, returns `error` outcome                     |
 | Push auth failure            | Missing SSH key / token             | Logged as non-fatal; outcome still `success` locally           |
+| Ctrl+C mid-apply             | User interrupts during file writes  | `run()` catches the interrupt and rolls back applied files     |
 
 ---
 

@@ -193,6 +193,10 @@ def main():
         sys.exit(0 if result.outcome == "success" else 1)
 
     except KeyboardInterrupt:
+        # AutonomousAgent.run() catches KeyboardInterrupt raised inside the loop
+        # and rolls back before returning. Reaching here means the interrupt
+        # landed outside it -- during setup, or on a second Ctrl+C -- so no
+        # files have been applied by the agent.
         print("\nInterrupted by user.", file=sys.stderr)
         write_github_output({
             "outcome": "aborted",
@@ -200,7 +204,7 @@ def main():
             "iterations": "0",
             "branch_name": "",
             "pr_url": "",
-            "final_message": "Interrupted by user.",
+            "final_message": "Interrupted by user before any changes were applied.",
         })
         sys.exit(130)
     except Exception as e:
