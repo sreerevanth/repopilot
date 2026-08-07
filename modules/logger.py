@@ -146,8 +146,17 @@ class AgentLogger:
 
     def log_execution(self, exec_result):
         status = "PASS" if exec_result.success else ("TIMEOUT" if exec_result.timed_out else "FAIL")
-        self._logger.info(f"  {status} | exit={exec_result.exit_code} | {exec_result.duration_seconds:.1f}s")
+        sandbox = getattr(exec_result, "sandbox", "unknown")
+        self._logger.info(
+            f"  {status} | exit={exec_result.exit_code} | "
+            f"{exec_result.duration_seconds:.1f}s | sandbox={sandbox}"
+        )
         self._logger.info(f"     cmd: {exec_result.command}")
+        if sandbox == "subprocess-fallback":
+            self._logger.warning(
+                "     This run was NOT isolated - Docker was unavailable and the "
+                "command ran directly on the host."
+            )
         if exec_result.stdout.strip():
             self._logger.debug(f"     stdout:\n{exec_result.stdout[:1000]}")
         if exec_result.stderr.strip():
