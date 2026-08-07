@@ -55,6 +55,10 @@ Examples:
                         help="Test runner to use (default: pytest)")
     parser.add_argument("--runner-args", nargs="*", default=None,
                         help="Extra arguments to pass to the test runner")
+    parser.add_argument("--skip-tests", action="store_true",
+                        help="Do not run a test suite. Changes are accepted on the "
+                             "model's confidence alone - suitable for refactors and "
+                             "comment passes, not for behaviour changes.")
     parser.add_argument("--run-file", default=None,
                         help="Run a specific file instead of the test suite")
     parser.add_argument("--run-file-runner", default="python",
@@ -182,6 +186,7 @@ def main():
         # Execution
         test_runner=args.runner,
         test_args=args.runner_args,
+        skip_tests=args.skip_tests,
         run_file=args.run_file,
         run_file_runner=args.run_file_runner,
         lint_runner=args.lint_runner,

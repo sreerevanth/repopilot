@@ -42,6 +42,7 @@ class AgentConfig:
     interactive: bool = False   # pause for review after tests pass, before commit
 
     # Execution
+    skip_tests: bool = False               # accept the LLM's own verdict instead
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
     run_file: Optional[str] = None         # run a specific file instead of tests
@@ -121,6 +122,26 @@ class AutonomousAgent:
         """Convert task text into a valid git branch name."""
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", task.lower())[:40].strip("-")
         return f"{self.config.git_branch_prefix}/{slug}-{self.run_id[-6:]}"
+
+    def _skipped_execution(self, confidence: float) -> ExecutionResult:
+        """
+        Stand-in result for --skip-tests.
+
+        Deliberately not dressed up as a passing test run: `command` says what
+        happened and the stdout records the confidence the decision rested on,
+        so a log cannot be mistaken for evidence that a suite went green.
+        """
+        return ExecutionResult(
+            command="(skipped - --skip-tests; no test suite was run)",
+            exit_code=0,
+            stdout=(
+                f"Tests were not run. Accepted on the model's own confidence of "
+                f"{confidence:.2f}. No suite verified this change."
+            ),
+            stderr="",
+            timed_out=False,
+            duration_seconds=0.0,
+        )
 
     def _run_execution(self) -> ExecutionResult:
         """Run tests or the specified file in the sandbox."""
@@ -471,7 +492,10 @@ class AutonomousAgent:
                     self.logger.record_iteration(iter_record)
                     continue
 
-            exec_result = self._run_execution()
+            if cfg.skip_tests:
+                exec_result = self._skipped_execution(llm_resp.confidence)
+            else:
+                exec_result = self._run_execution()
             self.logger.log_execution(exec_result)
             last_exec = exec_result
 
@@ -486,7 +510,13 @@ class AutonomousAgent:
 
             # ── Step 6: Success check ──
             if exec_result.success:
-                self.logger.info(f"  Tests passed on iteration {iteration}")
+                if cfg.skip_tests:
+                    self.logger.warning(
+                        f"  Accepting iteration {iteration} without running tests "
+                        f"(--skip-tests, confidence {llm_resp.confidence:.2f})."
+                    )
+                else:
+                    self.logger.info(f"  Tests passed on iteration {iteration}")
 
                 changed_paths = [c.path for c in last_changes]
                 if not self._confirm_commit(changed_paths):
