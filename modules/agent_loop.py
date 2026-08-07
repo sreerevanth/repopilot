@@ -407,6 +407,13 @@ class AutonomousAgent:
             "error": "Agent encountered an unrecoverable error.",
         }.get(outcome, "Unknown outcome")
 
+        print(f"\n{'='*40}")
+        print(f"Token Usage Summary:")
+        print(f"  Input Tokens  : {self.llm.input_tokens_used}")
+        print(f"  Output Tokens : {self.llm.output_tokens_used}")
+        print(f"  Estimated Cost: ${self.llm.total_cost:.4f}")
+        print(f"{'='*40}\n")
+
         self.logger.finish_run(outcome, self.branch_name, pr_url)
 
         return AgentRunResult(
