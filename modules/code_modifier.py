@@ -4,6 +4,7 @@ Safely applies file changes from LLM output.
 Creates backups, validates paths, preserves structure.
 """
 
+import logging
 import os
 import shutil
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 from modules.llm_client import FileChange
+
+# Named under "agent." so it inherits whatever handlers AgentLogger configures,
+# and so --quiet and the run log both apply. Library code writing to stdout can
+# be neither routed nor silenced.
+_LOG = logging.getLogger("agent.code_modifier")
 
 
 @dataclass
@@ -250,15 +256,15 @@ class CodeModificationEngine:
             text=True,
         )
         if check.returncode != 0:
-            print(f"[Rollback] Warning: git stash failed — {check.stderr.strip()}")
+            _LOG.warning("git stash failed: %s", check.stderr.strip())
             return False
 
         # git stash exits 0 even on a clean tree — detect that case
         if "No local changes to save" in check.stdout:
-            print("[Rollback] Nothing to stash — working tree is clean.")
+            _LOG.info("Nothing to stash; the working tree is clean.")
             return False
 
-        print("[Rollback] Git stash saved. Run with --rollback to undo.")
+        _LOG.info("Git stash saved. Run with --rollback to undo.")
         return True
 
     def git_stash_pop(self, repo_root: str) -> bool:
@@ -271,7 +277,7 @@ class CodeModificationEngine:
             text=True,
         )
         if result.returncode == 0:
-            print("[Rollback] Successfully restored previous state.")
+            _LOG.info("Restored the previous working state.")
         else:
-            print(f"[Rollback] Failed to pop stash — {result.stderr.strip()}")
+            _LOG.error("Failed to pop the stash: %s", result.stderr.strip())
         return result.returncode == 0
