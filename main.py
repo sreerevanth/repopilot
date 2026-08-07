@@ -95,6 +95,14 @@ Examples:
     parser.add_argument("--model", default=None,
                         help="LLM model name to use (default: claude-sonnet-4-20250514)")
 
+    # Provider configuration
+    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "openai", "gemini", "ollama"],
+                        help="LLM provider to use (default: anthropic)")
+
+    # Config file support
+    parser.add_argument("--config", default=None,
+                        help="Path to configuration JSON file (default: .repopilot.json in repo root)")
+
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
@@ -119,6 +127,19 @@ def write_github_output(outputs: dict[str, str]):
 
 def main():
     args = parse_args()
+
+    # Configuration file support (#22)
+    config_file = args.config or os.path.join(args.repo or ".", ".repopilot.json")
+    if os.path.exists(config_file):
+        try:
+            import json
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                for k, v in config_data.items():
+                    if hasattr(args, k) and getattr(args, k) in (None, "anthropic", "claude-sonnet-4-20250514", False):
+                        setattr(args, k, v)
+        except Exception as e:
+            print(f"Warning: Failed to load config file {config_file}: {e}", file=sys.stderr)
 
     repo_root = os.path.abspath(args.repo)
     if args.rollback:
@@ -169,6 +190,7 @@ def main():
         # LLM
         anthropic_api_key=args.api_key,
         model=args.model,
+        provider=args.provider,
     )
 
     try:

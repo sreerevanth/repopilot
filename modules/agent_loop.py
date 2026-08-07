@@ -67,6 +67,7 @@ class AgentConfig:
     # LLM
     anthropic_api_key: Optional[str] = None
     model: Optional[str] = None
+    provider: str = "anthropic"
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -100,7 +101,7 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(api_key=cfg.anthropic_api_key, model=cfg.model)
+        self.llm = LLMClient(api_key=cfg.anthropic_api_key, model=cfg.model, provider=cfg.provider)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
 
@@ -409,6 +410,13 @@ class AutonomousAgent:
             "max_retries": f"Exhausted {cfg.max_iterations} iterations without passing tests.",
             "error": "Agent encountered an unrecoverable error.",
         }.get(outcome, "Unknown outcome")
+
+        print(f"\n{'='*40}")
+        print(f"Token Usage Summary:")
+        print(f"  Input Tokens  : {self.llm.input_tokens_used}")
+        print(f"  Output Tokens : {self.llm.output_tokens_used}")
+        print(f"  Estimated Cost: ${self.llm.total_cost:.4f}")
+        print(f"{'='*40}\n")
 
         self.logger.finish_run(outcome, self.branch_name, self.pr_url)
 
