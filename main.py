@@ -54,6 +54,14 @@ Examples:
     parser.add_argument("--run-file-runner", default="python",
                         choices=["python", "node", "ruby", "bash"],
                         help="Runner for --run-file (default: python)")
+    parser.add_argument("--lint", dest="lint_runner", default=None,
+                        choices=["ruff", "flake8", "pyflakes", "eslint", "tsc",
+                                 "govet", "clippy"],
+                        help="Run a linter before the test suite. A failure short-"
+                             "circuits the iteration and feeds the lint output back "
+                             "to the model.")
+    parser.add_argument("--lint-args", nargs="*", default=[],
+                        help="Extra arguments for --lint")
     parser.add_argument("--timeout", type=int, default=120,
                         help="Execution timeout in seconds (default: 120)")
 
@@ -87,17 +95,9 @@ Examples:
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
-    # LLM provider
-    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "ollama"],
-                        help="LLM provider (default: anthropic)")
-    parser.add_argument("--model", default=None,
-                        help="Model name. Defaults per provider: claude-sonnet-4 / llama3")
-    parser.add_argument("--ollama-host", default=None,
-                        help="Ollama base URL (default: http://localhost:11434)")
-
     # API key
     parser.add_argument("--api-key", default=None,
-                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var). Unused with --provider ollama")
+                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
@@ -151,6 +151,8 @@ def main():
         test_args=args.runner_args,
         run_file=args.run_file,
         run_file_runner=args.run_file_runner,
+        lint_runner=args.lint_runner,
+        lint_args=args.lint_args,
         timeout_seconds=args.timeout,
 
         # Loop
@@ -172,9 +174,6 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
-        llm_provider=args.provider,
-        llm_model=args.model,
-        ollama_host=args.ollama_host,
     )
 
     try:
