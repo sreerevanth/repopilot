@@ -271,6 +271,28 @@ return MAX_RETRIES
 
 ---
 
+### Knowing whether a run was isolated
+
+`DockerSandbox` falls back to `SubprocessSandbox` when Docker is unavailable,
+which means `--network=none`, the 512MB memory cap and the 1-CPU limit **do not
+apply to that run**. The fallback logs a warning when it happens, and every
+`ExecutionResult` records which executor produced it — `docker` (with
+`result.isolated` set), `subprocess`, or `subprocess-fallback` for the case
+where isolation was asked for and quietly not delivered.
+
+Pass `strict=True` to make that a hard failure instead:
+
+```python
+DockerSandbox(repo, strict=True).run_tests("pytest")
+# raises SandboxUnavailableError rather than running unisolated
+```
+
+"Unavailable" means either no `docker` on PATH or no daemon answering — an
+installed-but-not-running Docker Desktop is the common case, and it leaves the
+binary on PATH.
+
+---
+
 ## Extending the System
 
 **Add a new test runner:**

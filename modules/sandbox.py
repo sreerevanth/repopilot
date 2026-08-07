@@ -8,6 +8,7 @@ Runs code in isolation using subprocess with:
 - Optional Docker support
 """
 
+import logging
 import os
 import shlex
 import shutil
@@ -15,6 +16,24 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Optional
+
+_LOG = logging.getLogger("agent.sandbox")
+
+# Which executor actually ran a command. Recorded on every ExecutionResult so a
+# run log can be audited after the fact -- without this, a run that silently
+# lost its isolation is indistinguishable from one that kept it.
+SANDBOX_DOCKER = "docker"
+SANDBOX_SUBPROCESS = "subprocess"
+SANDBOX_SUBPROCESS_FALLBACK = "subprocess-fallback"
+
+
+class SandboxUnavailableError(RuntimeError):
+    """
+    Raised when DockerSandbox(strict=True) cannot provide isolation.
+
+    Degrading to an unisolated executor is a reasonable default for interactive
+    use and a bad one for CI, so strict mode turns it into a hard failure.
+    """
 
 
 @dataclass
@@ -25,15 +44,22 @@ class ExecutionResult:
     stderr: str
     timed_out: bool
     duration_seconds: float
+    sandbox: str = SANDBOX_SUBPROCESS
 
     @property
     def success(self) -> bool:
         return self.exit_code == 0 and not self.timed_out
 
+    @property
+    def isolated(self) -> bool:
+        """True only when the command actually ran inside a container."""
+        return self.sandbox == SANDBOX_DOCKER
+
     def summary(self) -> str:
         status = "PASS" if self.success else ("TIMEOUT" if self.timed_out else "FAIL")
         lines = [
-            f"{status} | exit={self.exit_code} | {self.duration_seconds:.2f}s",
+            f"{status} | exit={self.exit_code} | {self.duration_seconds:.2f}s "
+            f"| sandbox={self.sandbox}",
             f"  cmd: {self.command}",
         ]
         if self.stdout.strip():
@@ -94,6 +120,30 @@ def _resolve_runner(runner_name: str) -> Optional[list[str]]:
     if shutil.which(executable):
         return candidates
     return None
+
+
+def _docker_is_usable(probe_timeout: int = 15) -> bool:
+    """
+    True only if the docker CLI exists *and* a daemon answers it.
+
+    `shutil.which("docker")` alone is not enough. Docker Desktop installed but
+    not running is the common case on developer laptops, and it leaves the
+    binary on PATH. `docker run` then exits non-zero with "Cannot connect to the
+    Docker daemon", which is indistinguishable from a failing test suite once it
+    is wrapped in an ExecutionResult -- the agent reads it as a test failure and
+    starts rewriting working code.
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        proc = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True,
+            timeout=probe_timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 def _coerce_output(value) -> str:
@@ -231,16 +281,34 @@ class DockerSandbox:
         working_dir: str,
         image: str = "python:3.11-slim",
         timeout_seconds: int = 120,
+        strict: bool = False,
     ):
+        """
+        `strict=True` raises SandboxUnavailableError instead of falling back to
+        an unisolated executor. Use it in CI, where losing isolation should stop
+        the run rather than quietly change what the guarantees are.
+        """
         self.working_dir = os.path.abspath(working_dir)
         self.image = image
         self.timeout = timeout_seconds
-        self._docker_available = shutil.which("docker") is not None
+        self.strict = strict
+        self._docker_available = _docker_is_usable()
 
     def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
         if not self._docker_available:
+            reason = (
+                "Docker is unavailable (no CLI on PATH, or no daemon answering). "
+                "Network isolation, the 512MB memory cap and the 1-CPU limit are "
+                "NOT in effect."
+            )
+            if self.strict:
+                raise SandboxUnavailableError(reason)
+
+            _LOG.warning("DockerSandbox: %s Falling back to SubprocessSandbox.", reason)
             sb = SubprocessSandbox(self.working_dir, self.timeout)
-            return sb.run_tests(runner, extra_args)
+            result = sb.run_tests(runner, extra_args)
+            result.sandbox = SANDBOX_SUBPROCESS_FALLBACK
+            return result
 
         runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
         inner_cmd = runner_cmd + (extra_args or [])
@@ -257,4 +325,6 @@ class DockerSandbox:
         ]
 
         sb = SubprocessSandbox(self.working_dir, self.timeout)
-        return sb.run(docker_cmd)
+        result = sb.run(docker_cmd)
+        result.sandbox = SANDBOX_DOCKER
+        return result
