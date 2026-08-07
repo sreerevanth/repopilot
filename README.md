@@ -164,6 +164,25 @@ python demo_run.py /path/to/sample_repo
 
 ---
 
+## Task Sources
+
+`--task` normally carries a description. It can instead carry a GitHub issue
+URL, in which case the title, body and comments are fetched and composed into
+the task the agent works from:
+
+```bash
+python main.py --repo . --task https://github.com/sreerevanth/repopilot/issues/75
+```
+
+Public repositories work unauthenticated; `GITHUB_TOKEN` raises the rate limit
+and is required for private ones. Long bodies and threads are trimmed so the
+issue text does not crowd source files out of the context budget.
+
+If the URL cannot be resolved the run stops with an explanation. Passing it
+through as a literal task would send the agent off to implement a URL.
+
+---
+
 ## Module Reference
 
 ### Module 1 — `repo_ingestion.py`

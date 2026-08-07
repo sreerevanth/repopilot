@@ -18,6 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.code_modifier import CodeModificationEngine
+from modules.task_source import (
+    TaskResolutionError,
+    looks_like_issue_url,
+    resolve_task,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,7 +46,7 @@ Examples:
     )
 
     parser.add_argument("--repo", required=True, help="Path to the git repository")
-    parser.add_argument("--task", required=False, help="High-level task description (can also be provided via AGENT_TASK env var)")
+    parser.add_argument("--task", required=False, help="High-level task description, or a GitHub issue URL to pull one from (can also be provided via AGENT_TASK env var)")
 
     # Execution
     parser.add_argument("--runner", default="pytest",
@@ -128,6 +133,12 @@ def main():
     yes_flag = args.yes or os.environ.get("CI") == "true"
 
     task = args.task or os.environ.get("AGENT_TASK")
+    if task and looks_like_issue_url(task):
+        try:
+            task = resolve_task(task)
+        except TaskResolutionError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
     if not task:
         print("ERROR: Task description is required. Provide --task or set the AGENT_TASK environment variable.", file=sys.stderr)
         sys.exit(1)
