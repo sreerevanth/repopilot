@@ -18,14 +18,14 @@ graph TD
         D --> E[Repo Ingestion]
         E --> F[Context Builder]
         F -->|Prompt Context| G[LLM Client]
-        
+
         G -->|Parse Error| G
         G -->|Low Confidence| H[Skip to Next Iteration]
         G -->|Code Changes| I[Code Modifier]
-        
+
         I -->|Stash & Backup| J[Validate & Apply Changes]
         J --> K[Sandbox Execution]
-        
+
         K -->|Test Success| L{Success Condition}
         K -->|Test Failure / Timeout| M[Rollback & Feed Error to LLM]
         M -.-> E
@@ -33,11 +33,11 @@ graph TD
 
     L -->|Git Enabled| N[Git Integration]
     L -->|Git Disabled| O([Complete Task])
-    
+
     N --> P[Commit Changes]
     P --> Q[Push Branch]
     Q --> R[Create GitHub PR]
-    
+
     R --> O
 ```
 
@@ -45,22 +45,26 @@ graph TD
 
 ## 📦 Core Modules Breakdown
 
-The codebase is highly modular, ensuring each component handles exactly one responsibility. 
+The codebase is highly modular, ensuring each component handles exactly one responsibility.
 
 ### 1. The Orchestrator
+
 - **`main.py`**: The main CLI entry point. Responsible for parsing arguments (like runner, task, max iterations, Git configuration) and starting the `AutonomousAgent`.
 - **`modules/agent_loop.py`**: Contains the core `AutonomousAgent` class. It manages the `while` loop connecting all other modules, handling logic such as early exits, timeout handling, and Git operations.
 
 ### 2. File & Context Management
+
 - **`modules/repo_ingestion.py`**: Ingests the repository file tree safely, respecting `.gitignore` rules to avoid loading unnecessary files (e.g., node_modules, binaries).
 - **`modules/context_builder.py`**: Controls exactly what text goes to the LLM. It limits the token window to prevent API overflow while ensuring the agent has sufficient context.
 
 ### 3. Intelligence & Execution
+
 - **`modules/llm_client.py`**: The API wrapper for Anthropic. It constructs the system prompts and strictly parses structured JSON responses from the LLM, managing both initial requests and feedback retries.
 - **`modules/code_modifier.py`**: Handles safe file operations. It verifies that target paths belong inside the repo, creates backups, applies literal or diff-based code edits, and provides rollback capabilities if testing fails.
 - **`modules/sandbox.py`**: Executes test commands (`pytest`, `npm test`, etc.) using Python's isolated `subprocess` module. It captures `stdout`, `stderr`, and exit codes while enforcing hard timeouts.
 
 ### 4. Version Control Integration
+
 - **`modules/git_integration.py`**: Wraps local `git` CLI operations (branching, staging, stashing, committing) and interfaces with the GitHub CLI (`gh`) to automatically create Pull Requests and branch tracking.
 
 ---
