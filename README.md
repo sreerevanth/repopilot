@@ -106,6 +106,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ## Usage
 
 ### Basic — fix failing tests
+
 ```bash
 python main.py \
   --repo /path/to/your/project \
@@ -113,6 +114,7 @@ python main.py \
 ```
 
 ### With full Git pipeline
+
 ```bash
 python main.py \
   --repo /path/to/your/project \
@@ -125,6 +127,7 @@ python main.py \
 ```
 
 ### Run a specific file (not test suite)
+
 ```bash
 python main.py \
   --repo . \
@@ -134,11 +137,13 @@ python main.py \
 ```
 
 ### Offline demo (no API key needed)
+
 ```bash
 python demo_run.py /path/to/sample_repo
 ```
 
 ### All CLI flags
+
 ```
 --repo          Path to git repository (required)
 --task          Task description (required)
@@ -162,35 +167,41 @@ python demo_run.py /path/to/sample_repo
 ## Module Reference
 
 ### Module 1 — `repo_ingestion.py`
+
 - Recursively walks a directory, skipping `.git`, `node_modules`, `__pycache__`, etc.
 - Ignores binary files, files > 512KB, and enforces an 8MB total repo budget.
 - Returns a `Repository` with `FileRecord[]` — path, content, language, checksum.
 
 ### Module 2 — `context_builder.py`
+
 - Scores every file against the task using: language priority, path keyword match,
   content keyword frequency, entry-point bonus, import graph hints.
 - Fills a configurable character budget (~60K chars / ~15K tokens).
 - Returns `BuiltContext.render()` — XML-tagged source ready for the LLM prompt.
 
 ### Module 3 — `llm_client.py`
+
 - Wraps the Anthropic API with structured JSON I/O.
 - System prompt enforces a machine-parseable output schema.
 - `initial_request()` for first pass; `retry_request()` for error-fed retries.
 - Parses `FileChange[]` from JSON; gracefully handles malformed output.
 
 ### Module 4 — `code_modifier.py`
+
 - Validates paths (prevents directory traversal).
 - Backs up every file before modification.
 - Supports `modify`, `create`, `delete` actions.
 - `rollback()` restores all backups on failure.
 
 ### Module 5 — `sandbox.py`
+
 - `SubprocessSandbox`: runs commands via `subprocess.run()` with timeout, output
   capture, and environment sanitization (blocks cloud credentials from leaking).
 - `DockerSandbox`: wraps Docker with `--network=none`, memory/CPU caps, read-only
   volume mount. Falls back to subprocess if Docker is unavailable.
 
 ### Module 6 — `agent_loop.py` (CORE)
+
 - `AutonomousAgent.run()` orchestrates all modules.
 - Iterates up to `max_iterations` times.
 - On success: commits (optionally pushes + opens PR).
@@ -198,11 +209,13 @@ python demo_run.py /path/to/sample_repo
 - Produces a `AgentRunResult` with outcome, branch, PR URL, iteration count.
 
 ### Module 7 — `git_integration.py`
+
 - Wraps `git` subprocess calls: `create_branch`, `stage_files`, `commit`, `push`.
 - GitHub PR creation via REST API (no extra dependencies — uses `urllib`).
 - `rollback` is handled by `code_modifier.py`; git ops are only for success path.
 
 ### Module 8 — `logger.py`
+
 - Every iteration appended to `<run_id>.jsonl` (structured, machine-readable).
 - Human-readable log at `<run_id>_human.log`.
 - Final `<run_id>_summary.json` with full run record.
@@ -243,30 +256,32 @@ return MAX_RETRIES
 
 ## Failure Cases & Mitigations
 
-| Failure | Cause | Mitigation |
-|---------|-------|------------|
-| `JSONDecodeError` from LLM | Model adds markdown fences or prose | Regex strips fences; parse error fed back as context next iter |
-| Path traversal in LLM output | LLM outputs `../../etc/passwd` | `_safe_abs_path()` validates all paths against repo root |
-| Empty content for modify | LLM returns `""` for file content | Validation rejects before apply; error logged |
-| Infinite test loop | Test hangs | `timeout_seconds` in sandbox kills process |
-| Repo too large | Monorepo with 10K files | 8MB total budget + per-file 512KB cap; budget exhausted = skip |
-| Git merge conflict | Branch already exists | `create_branch` falls back to checkout if branch exists |
-| LLM low confidence | Ambiguous task | `min_confidence_to_apply` threshold; skip without applying |
-| Test runner not found | `pytest` not installed | `sandbox.py` checks `shutil.which()`; returns exit_code 127 |
-| All apply ops fail | Wrong paths, permission error | Agent breaks loop, returns `error` outcome |
-| Push auth failure | Missing SSH key / token | Logged as non-fatal; outcome still `success` locally |
+| Failure                      | Cause                               | Mitigation                                                     |
+| ---------------------------- | ----------------------------------- | -------------------------------------------------------------- |
+| `JSONDecodeError` from LLM   | Model adds markdown fences or prose | Regex strips fences; parse error fed back as context next iter |
+| Path traversal in LLM output | LLM outputs `../../etc/passwd`      | `_safe_abs_path()` validates all paths against repo root       |
+| Empty content for modify     | LLM returns `""` for file content   | Validation rejects before apply; error logged                  |
+| Infinite test loop           | Test hangs                          | `timeout_seconds` in sandbox kills process                     |
+| Repo too large               | Monorepo with 10K files             | 8MB total budget + per-file 512KB cap; budget exhausted = skip |
+| Git merge conflict           | Branch already exists               | `create_branch` falls back to checkout if branch exists        |
+| LLM low confidence           | Ambiguous task                      | `min_confidence_to_apply` threshold; skip without applying     |
+| Test runner not found        | `pytest` not installed              | `sandbox.py` checks `shutil.which()`; returns exit_code 127    |
+| All apply ops fail           | Wrong paths, permission error       | Agent breaks loop, returns `error` outcome                     |
+| Push auth failure            | Missing SSH key / token             | Logged as non-fatal; outcome still `success` locally           |
 
 ---
 
 ## Extending the System
 
 **Add a new test runner:**
+
 ```python
 # In sandbox.py, add to ALLOWED_RUNNERS:
 "deno": ["deno", "test"],
 ```
 
 **Add a new file type to context scoring:**
+
 ```python
 # In context_builder.py LANGUAGE_PRIORITY:
 "lua": 7,
@@ -277,6 +292,7 @@ Implement the same `initial_request()` / `retry_request()` interface in a new
 `OpenAIClient` class and pass it to `AutonomousAgent` — the loop is provider-agnostic.
 
 **Add PR reviewer assignment:**
+
 ```python
 # In git_integration.py create_github_pr():
 payload["reviewers"] = ["alice", "bob"]
