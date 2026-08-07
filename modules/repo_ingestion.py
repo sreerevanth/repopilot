@@ -3,11 +3,20 @@ Module 1: Repository Ingestion
 Recursively scans a project, ignores noise, stores file content + metadata.
 """
 
+import fnmatch
 import os
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+try:  # optional at runtime so an un-reinstalled checkout still works
+    import pathspec
+except ImportError:  # pragma: no cover - exercised via the fallback tests
+    pathspec = None
+
+_LOG = logging.getLogger("agent.repo_ingestion")
 
 IGNORE_DIRS = {
     ".git", ".svn", ".hg", "node_modules", "__pycache__", ".pytest_cache",
@@ -26,6 +35,19 @@ IGNORE_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx",
     ".lock",  # package-lock.json etc. — too noisy
 }
+
+# Files that must never enter the LLM prompt, whether or not .gitignore lists
+# them. Ingested content is sent verbatim to the model, so a missing or
+# incomplete .gitignore should not be the only thing standing between a
+# developer's secrets and an outbound API call.
+SECRET_FILE_PATTERNS = (
+    ".env", ".env.*", "*.env",
+    "*.pem", "*.key", "*.p12", "*.pfx",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    ".npmrc", ".pypirc", ".netrc", "_netrc",
+    "credentials", "credentials.json",
+    ".htpasswd", "*.keystore", "*.jks",
+)
 
 MAX_FILE_SIZE_BYTES = 512 * 1024  # 512 KB per file
 MAX_TOTAL_BYTES = 8 * 1024 * 1024  # 8 MB total repo budget
@@ -100,14 +122,62 @@ def _should_ignore_dir(dirname: str) -> bool:
     return dirname.lower() in IGNORE_DIRS or dirname.startswith(".")
 
 
+def _is_secret_file(filepath: str) -> bool:
+    """True if the filename matches a pattern that commonly holds credentials."""
+    name = os.path.basename(filepath).lower()
+    return any(fnmatch.fnmatch(name, pat) for pat in SECRET_FILE_PATTERNS)
+
+
 def _should_ignore_file(filepath: str) -> bool:
     ext = Path(filepath).suffix.lower()
     name = os.path.basename(filepath).lower()
+    if _is_secret_file(filepath):
+        return True
     if ext in IGNORE_EXTENSIONS:
         return True
-    if name.startswith(".") and name not in (".env", ".gitignore", ".dockerignore"):
+    if name.startswith(".") and name not in (".gitignore", ".dockerignore"):
         return True
     return False
+
+
+def load_ignore_spec(root: str):
+    """
+    Build a PathSpec from the repo's .gitignore and .git/info/exclude.
+
+    Returns None when pathspec is unavailable or there is nothing to parse, in
+    which case ingestion falls back to the hardcoded IGNORE_DIRS/EXTENSIONS
+    behaviour. Only root-level ignore files are read; nested .gitignore files
+    are not resolved (see the note in the README).
+    """
+    if pathspec is None:
+        _LOG.debug("pathspec not installed; falling back to hardcoded ignore rules")
+        return None
+
+    lines: list[str] = []
+    for candidate in (
+        os.path.join(root, ".gitignore"),
+        os.path.join(root, ".git", "info", "exclude"),
+    ):
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                lines.extend(fh.read().splitlines())
+        except OSError:
+            continue
+
+    if not lines:
+        return None
+
+    # "gitignore" is the current factory name; "gitwildmatch" is its deprecated
+    # predecessor and is still the only one available on pathspec < 0.12.
+    for style in ("gitignore", "gitwildmatch"):
+        try:
+            return pathspec.PathSpec.from_lines(style, lines)
+        except (KeyError, LookupError):
+            continue
+        except Exception as exc:  # malformed patterns must not break ingestion
+            _LOG.warning("could not parse ignore patterns (%s); using defaults", exc)
+            return None
+    return None
 
 
 def ingest_repository(repo_root: str) -> Repository:
@@ -120,17 +190,36 @@ def ingest_repository(repo_root: str) -> Repository:
         raise ValueError(f"Not a directory: {root}")
 
     repo = Repository(root=root)
+    spec = load_ignore_spec(root)
+
+    def _rel(path: str) -> str:
+        return os.path.relpath(path, root).replace(os.sep, "/")
 
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune ignored directories in-place (modifies walk)
-        dirnames[:] = [d for d in dirnames if not _should_ignore_dir(d)]
+        # Prune ignored directories in-place (modifies walk). Directories are
+        # matched with a trailing slash so gitwildmatch honours "build/" style
+        # patterns, and pruning here means an ignored tree is never descended.
+        kept = []
+        for d in dirnames:
+            if _should_ignore_dir(d):
+                continue
+            rel_dir = _rel(os.path.join(dirpath, d))
+            if spec is not None and spec.match_file(rel_dir + "/"):
+                repo.skipped.append(f"{rel_dir}/ (gitignored)")
+                continue
+            kept.append(d)
+        dirnames[:] = kept
 
         for filename in sorted(filenames):
             abs_path = os.path.join(dirpath, filename)
-            rel_path = os.path.relpath(abs_path, root).replace(os.sep, "/")
+            rel_path = _rel(abs_path)
 
             if _should_ignore_file(abs_path):
                 repo.skipped.append(rel_path)
+                continue
+
+            if spec is not None and spec.match_file(rel_path):
+                repo.skipped.append(f"{rel_path} (gitignored)")
                 continue
 
             try:

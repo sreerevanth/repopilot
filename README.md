@@ -169,8 +169,20 @@ python demo_run.py /path/to/sample_repo
 ### Module 1 — `repo_ingestion.py`
 
 - Recursively walks a directory, skipping `.git`, `node_modules`, `__pycache__`, etc.
+- Respects the repository's `.gitignore` and `.git/info/exclude` via `pathspec`,
+  so build output, caches and anything else the project already ignores stays
+  out of the context budget.
+- Never ingests credential-bearing filenames (`.env*`, `*.pem`, `*.key`,
+  `id_rsa`, `.npmrc`, `.netrc`, `credentials*`, …). Ingested content is sent
+  verbatim to the model, so this holds even when the project has no
+  `.gitignore`.
 - Ignores binary files, files > 512KB, and enforces an 8MB total repo budget.
 - Returns a `Repository` with `FileRecord[]` — path, content, language, checksum.
+
+> Only root-level ignore files are read; nested `.gitignore` files are not
+> resolved. If `pathspec` is not installed the walker degrades to the built-in
+> `IGNORE_DIRS`/`IGNORE_EXTENSIONS` rules — the secret-filename filter is
+> independent of it and always applies.
 
 ### Module 2 — `context_builder.py`
 
