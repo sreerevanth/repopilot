@@ -1,0 +1,96 @@
+name: Agent Auto-Fix
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  agent-fix:
+    # Run only if the issue is labeled with 'agent-fix', or opened with 'agent-fix' label.
+    if: github.event.label.name == 'agent-fix' || (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'agent-fix'))
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run Developer Agent
+        id: run-agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGENT_TASK: |
+            Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
+
+            ${{ github.event.issue.body }}
+        run: |
+          python main.py \
+            --repo . \
+            --push \
+            --pr \
+            --base-branch ${{ github.event.repository.default_branch }} \
+            --yes
+
+      - name: Post Comment on Issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const outcome = "${{ steps.run-agent.outputs.outcome }}";
+            const prUrl = "${{ steps.run-agent.outputs.pr_url }}";
+            const runId = "${{ steps.run-agent.outputs.run_id }}";
+            const message = "${{ steps.run-agent.outputs.final_message }}";
+            const issuee = context.payload.issue.user.login;
+
+            let commentBody = "";
+            if (outcome === "success") {
+              commentBody = `Hello @${issuee},
+
+I have successfully fixed the issue! 🎉
+
+A Pull Request has been created with the changes:
+🔗 **[Pull Request](${prUrl})**
+
+**Run ID:** \`${runId}\`
+**Message:** ${message}`;
+            } else {
+              commentBody = `Hello @${issuee},
+
+I attempted to fix this issue automatically but encountered a problem.
+
+**Outcome:** \`${outcome || 'unknown/failed'}\`
+**Message:** ${message || 'No additional message was provided.'}
+
+Please check the GitHub Actions workflow logs for more details.`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: commentBody
+            });
