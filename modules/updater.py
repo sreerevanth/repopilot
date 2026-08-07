@@ -42,6 +42,14 @@ class UpdateResult:
     requirements_changed: bool = False
 
 
+def _same_path(a: str, b: str) -> bool:
+    """Compare two paths, tolerating symlinks and Windows case differences."""
+    return (
+        os.path.normcase(os.path.realpath(a))
+        == os.path.normcase(os.path.realpath(b))
+    )
+
+
 def _git(*args: str, cwd: str = INSTALL_ROOT) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
@@ -55,10 +63,26 @@ def _git(*args: str, cwd: str = INSTALL_ROOT) -> subprocess.CompletedProcess:
 
 
 def is_git_checkout(root: str = INSTALL_ROOT) -> bool:
+    """
+    True only if `root` is itself the top of a git checkout.
+
+    `git rev-parse --is-inside-work-tree` walks *up* the directory tree, so it
+    answers "true" for any directory nested inside a repository. Relying on it
+    would let --update fast-forward an ancestor repo -- someone's home directory,
+    or a parent project -- instead of RepoPilot. Comparing the discovered
+    toplevel against `root` is what makes the refusal mean anything.
+    """
     try:
-        return _git("rev-parse", "--is-inside-work-tree", cwd=root).returncode == 0
+        result = _git("rev-parse", "--show-toplevel", cwd=root)
     except (OSError, subprocess.SubprocessError):
         return False
+    if result.returncode != 0:
+        return False
+
+    toplevel = result.stdout.strip()
+    if not toplevel:
+        return False
+    return _same_path(toplevel, root)
 
 
 def has_local_changes(root: str = INSTALL_ROOT) -> bool:
@@ -131,6 +155,9 @@ def apply_update(
     root: str = INSTALL_ROOT,
 ) -> UpdateResult:
     """Fast-forward to the fetched commit. Refuses anything else."""
+    if not is_git_checkout(root):
+        return UpdateResult(False, f"{root} is not the top of a git checkout.")
+
     if has_local_changes(root):
         return UpdateResult(
             False,
