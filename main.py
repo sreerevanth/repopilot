@@ -134,6 +134,10 @@ Examples:
     parser.add_argument("--config", default=None,
                         help="Path to configuration JSON file (default: .repopilot.json in repo root)")
 
+    # Model configuration
+    parser.add_argument("--model", default=None,
+                        help="LLM model name to use (default: claude-sonnet-4-20250514)")
+
     return parser.parse_args()
 
 
