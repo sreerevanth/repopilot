@@ -1,0 +1,86 @@
+name: RepoPilot Agent Fix
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+jobs:
+  agent-fix:
+    if: >
+      (github.event_name == 'issues' && github.event.label.name == 'agent-fix') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/agent-fix'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Extract Issue Task
+        id: extract_task
+        run: |
+          if [ "${{ github.event_name }}" == "issues" ]; then
+            ISSUE_BODY="${{ github.event.issue.title }}. ${{ github.event.issue.body }}"
+          else
+            ISSUE_BODY="Fix issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          fi
+          # Escape newlines for GITHUB_ENV
+          echo "TASK<<EOF" >> $GITHUB_ENV
+          echo "$ISSUE_BODY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Run RepoPilot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: "true"
+        run: |
+          python main.py \
+            --repo . \
+            --task "$TASK" \
+            --yes \
+            --push \
+            --pr \
+            --branch-prefix "fix/issue-${{ github.event.issue.number }}"
+
+      - name: Comment on Issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ RepoPilot has successfully created a PR to address this issue!'
+            })
+
+      - name: Comment on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ RepoPilot encountered an error while trying to fix this issue. Please check the Actions logs for details.'
+            })
