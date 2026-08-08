@@ -37,6 +37,7 @@ from modules.sandbox import (
 )
 from modules.git_integration import GitIntegration
 from modules.doc_lookup import perform_lookups, render_lookups
+from modules.run_state import check_resumable, clear_state, load_state, save_state
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
 from modules.token_tracker import TokenTracker

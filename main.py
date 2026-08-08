@@ -20,7 +20,6 @@ from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.notify import notify_run_complete
 from modules.code_modifier import CodeModificationEngine
-from modules.updater import run_update
 from modules.task_source import (
     TaskResolutionError,
     looks_like_issue_url,
@@ -141,13 +140,6 @@ Examples:
     parser.add_argument("--api-base-url", default=None,
                         help="Custom API base URL (for Ollama or self-hosted endpoints)")
 
-    # Model configuration
-    parser.add_argument("--model", default=None,
-                        help="LLM model name to use (default: claude-sonnet-4-20250514)")
-
-    # Provider configuration
-    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "openai", "gemini", "ollama"],
-                        help="LLM provider to use (default: anthropic)")
 
     # Config file support
     parser.add_argument("--config", default=None,
@@ -163,13 +155,6 @@ Examples:
                         help="After tests pass, show the diff and confirm before "
                              "committing. Ignored when --yes is set or CI=true.")
 
-    # Config file support
-    parser.add_argument("--config", default=None,
-                        help="Path to configuration JSON file (default: .repopilot.json in repo root)")
-
-    # Model configuration
-    parser.add_argument("--model", default=None,
-                        help="LLM model name to use (default: claude-sonnet-4-20250514)")
 
     return parser.parse_args()
 
@@ -214,12 +199,6 @@ def main():
         except Exception as e:
             print(f"Warning: Failed to load config file {config_file}: {e}", file=sys.stderr)
 
-    if args.update:
-        sys.exit(run_update(assume_yes=args.yes))
-
-    if not args.repo:
-        print("ERROR: --repo is required (except with --update).", file=sys.stderr)
-        sys.exit(2)
 
     repo_root = os.path.abspath(args.repo)
     if args.list_resumable:
@@ -288,7 +267,6 @@ def main():
         log_dir=args.log_dir,
 
         # CLI behavior
-        yes=args.yes or os.environ.get("CI") == "true",
 
         # Context
         force_include_paths=args.include,

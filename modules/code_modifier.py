@@ -45,8 +45,6 @@ class ApplyResult:
     new_path: Optional[str] = None   # destination, for "rename"
 
 
-import re
-
 def _apply_unified_diff(original: str, patch: str) -> str:
     """Apply a unified diff patch to the original text in pure Python."""
     original_lines = original.splitlines(keepends=True)

@@ -5,6 +5,7 @@ Recursively scans a project, ignores noise, stores file content + metadata.
 
 import fnmatch
 import os
+import re
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -282,6 +283,22 @@ def ingest_repository(repo_root: str) -> Repository:
                 continue
 
             candidates.append((abs_path, rel_path))
+
+    def _process_file(abs_path: str, rel_path: str):
+        """
+        Read one file, or None if it cannot be decoded or opened.
+
+        Defined here rather than at module level because the caller below was
+        already written against this name -- the definition was lost in a merge
+        while the call survived, so ingest_repository raised NameError on every
+        run. Mirrors the reader in ingest_repository_parallel.
+        """
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="strict") as fh:
+                content = fh.read()
+        except (UnicodeDecodeError, PermissionError, OSError):
+            return None
+        return content, abs_path, len(content.encode("utf-8"))
 
     # Parallel file reading
     with ThreadPoolExecutor() as executor:
