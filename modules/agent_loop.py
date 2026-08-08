@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from modules.repo_ingestion import ingest_repository, Repository
+from modules.repo_ingestion import ingest_repository, ingest_repository_parallel, Repository
 from modules.context_builder import build_context
 from modules.llm_client import LLMResponse, FileChange, create_llm_client
 from modules.code_modifier import CodeModificationEngine, ApplyResult
@@ -75,6 +75,9 @@ class AgentConfig:
     # Context
     force_include_paths: Optional[list] = None  # always include these files
 
+    # Parallel Processing
+    parallel: bool = False
+    workers: int = 10
 
 @dataclass
 class AgentRunResult:
@@ -198,7 +201,10 @@ class AutonomousAgent:
 
             # ── Step 1: Ingest repo (re-read to pick up changes from previous iter) ──
             try:
-                repo: Repository = ingest_repository(cfg.repo_root)
+                if cfg.parallel:
+                    repo: Repository = ingest_repository_parallel(cfg.repo_root, max_workers=cfg.workers)
+                else:
+                    repo: Repository = ingest_repository(cfg.repo_root)
             except Exception as e:
                 self.logger.error(f"Repo ingestion failed: {e}")
                 outcome = "error"
@@ -340,7 +346,10 @@ class AutonomousAgent:
                     )
 
                 self.modifier.git_stash_before_apply(self.config.repo_root)
-                apply_results = self.modifier.apply_changes(valid_changes)
+                if cfg.parallel and len(valid_changes) > 1:
+                    apply_results = self.modifier.apply_changes_parallel(valid_changes, max_workers=cfg.workers)
+                else:
+                    apply_results = self.modifier.apply_changes(valid_changes)
                 self.logger.log_apply_results(apply_results)
                 last_changes = valid_changes
                 last_apply_results = apply_results

@@ -7,6 +7,7 @@ import os
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 IGNORE_DIRS = {
@@ -170,4 +171,78 @@ def ingest_repository(repo_root: str) -> Repository:
             repo.files.append(record)
             repo.total_bytes += size
 
+    return repo
+
+
+def ingest_repository_parallel(repo_root: str, max_workers: int = 10) -> Repository:
+    """
+    Parallel version of ingest_repository using ThreadPoolExecutor.
+    """
+    root = os.path.abspath(repo_root)
+    if not os.path.isdir(root):
+        raise ValueError(f"Not a directory: {root}")
+
+    repo = Repository(root=root)
+    
+    # First pass: collect all files to process
+    paths_to_process = []
+    
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _should_ignore_dir(d)]
+        for filename in filenames:
+            abs_path = os.path.join(dirpath, filename)
+            rel_path = os.path.relpath(abs_path, root).replace(os.sep, "/")
+            
+            if _should_ignore_file(abs_path):
+                repo.skipped.append(rel_path)
+                continue
+                
+            try:
+                size = os.path.getsize(abs_path)
+            except OSError:
+                repo.skipped.append(rel_path)
+                continue
+                
+            if size > MAX_FILE_SIZE_BYTES:
+                repo.skipped.append(f"{rel_path} (too large: {size} bytes)")
+                continue
+                
+            paths_to_process.append((abs_path, rel_path, size))
+
+    # Process files in parallel
+    def process_file(file_info):
+        abs_path, rel_path, size = file_info
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="strict") as fh:
+                content = fh.read()
+            ext = Path(abs_path).suffix.lower()
+            checksum = hashlib.sha256(content.encode()).hexdigest()[:16]
+            return FileRecord(
+                path=rel_path,
+                abs_path=abs_path,
+                content=content,
+                size=size,
+                extension=ext,
+                language=infer_language(abs_path),
+                checksum=checksum,
+            )
+        except (UnicodeDecodeError, PermissionError):
+            return rel_path # return string to indicate failure
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_file, info): info for info in paths_to_process}
+        for future in as_completed(futures):
+            result = future.result()
+            if isinstance(result, str):
+                repo.skipped.append(f"{result} (binary or unreadable)")
+            else:
+                if repo.total_bytes + result.size > MAX_TOTAL_BYTES:
+                    repo.skipped.append(f"{result.path} (repo budget exhausted)")
+                else:
+                    repo.files.append(result)
+                    repo.total_bytes += result.size
+
+    # Sort files to ensure deterministic order (important for LLM context consistency)
+    repo.files.sort(key=lambda x: x.path)
+    
     return repo
