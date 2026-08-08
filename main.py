@@ -20,7 +20,6 @@ from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.notify import notify_run_complete
 from modules.code_modifier import CodeModificationEngine
-from modules.updater import run_update
 from modules.task_source import (
     TaskResolutionError,
     looks_like_issue_url,

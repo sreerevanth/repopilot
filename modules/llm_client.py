@@ -8,7 +8,10 @@ import json
 import logging
 import os
 import re
+import ssl
 import sys
+import urllib.error
+import urllib.request
 import time
 from pathlib import Path
 from dataclasses import dataclass
