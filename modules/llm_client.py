@@ -116,6 +116,8 @@ class LLMResponse:
     confidence: float
     done: bool
     parse_error: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -133,7 +135,7 @@ class LLMClient:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.client = anthropic.Anthropic(api_key=key)
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         """Raw API call with retry on transient errors."""
         for attempt in range(retries):
             try:
@@ -143,7 +145,10 @@ class LLMClient:
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                return response.content[0].text
+                text = response.content[0].text
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                return text, input_tokens, output_tokens
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -151,7 +156,7 @@ class LLMClient:
                 time.sleep(wait)
         raise RuntimeError("LLM call failed after retries")
 
-    def _parse_response(self, raw: str) -> LLMResponse:
+    def _parse_response(self, raw: str, in_tokens: int = 0, out_tokens: int = 0) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
         # Strip any accidental markdown fences
         text = raw.strip()
@@ -165,7 +170,8 @@ class LLMClient:
         if start == -1 or end == 0:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"No JSON object found in response: {raw[:300]}"
+                parse_error=f"No JSON object found in response: {raw[:300]}",
+                input_tokens=in_tokens, output_tokens=out_tokens,
             )
 
         try:
@@ -173,7 +179,8 @@ class LLMClient:
         except json.JSONDecodeError as e:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}"
+                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}",
+                input_tokens=in_tokens, output_tokens=out_tokens,
             )
 
         changes = []
@@ -191,13 +198,15 @@ class LLMClient:
             changes=changes,
             confidence=float(data.get("confidence", 0.5)),
             done=bool(data.get("done", False)),
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
         )
 
     def initial_request(self, task: str, context_str: str) -> LLMResponse:
         """First-pass: analyze task and produce code changes."""
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
-        raw = self._call(prompt)
-        return self._parse_response(raw)
+        raw, in_tok, out_tok = self._call(prompt)
+        return self._parse_response(raw, in_tok, out_tok)
 
     def retry_request(
         self,
@@ -222,5 +231,5 @@ class LLMClient:
             stderr=stderr[:4000] if stderr else "(empty)",
             context=context_str,
         )
-        raw = self._call(prompt)
-        return self._parse_response(raw)
+        raw, in_tok, out_tok = self._call(prompt)
+        return self._parse_response(raw, in_tok, out_tok)

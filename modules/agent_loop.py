@@ -21,12 +21,12 @@ from datetime import datetime
 from typing import Optional
 
 from modules.repo_ingestion import ingest_repository, Repository
-from modules.context_builder import build_context
 from modules.llm_client import LLMClient, LLMResponse, FileChange
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
 from modules.logger import AgentLogger, IterationRecord
+from modules.token_tracker import TokenTracker
 
 
 # ─────────────────────────────────────────────
@@ -100,6 +100,7 @@ class AutonomousAgent:
         self.llm = LLMClient(api_key=cfg.anthropic_api_key)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
+        self.token_tracker = TokenTracker()
 
         self.git: Optional[GitIntegration] = None
         if cfg.git_enabled:
@@ -166,6 +167,7 @@ class AutonomousAgent:
         pr_url: Optional[str] = None
         iterations_used = 0
 
+        from modules.context_builder import build_context
         for iteration in range(1, cfg.max_iterations + 1):
             iterations_used = iteration
             self.logger.start_iteration(iteration)
@@ -203,6 +205,13 @@ class AutonomousAgent:
                         stderr=last_exec.stderr,
                         exit_code=last_exec.exit_code,
                     )
+                
+                # Track usage
+                self.token_tracker.add_usage(
+                    model=self.llm.model,
+                    input_tokens=llm_resp.input_tokens,
+                    output_tokens=llm_resp.output_tokens,
+                )
             except Exception as e:
                 self.logger.error(f"LLM call failed: {e}")
                 outcome = "error"
@@ -407,7 +416,8 @@ class AutonomousAgent:
             "error": "Agent encountered an unrecoverable error.",
         }.get(outcome, "Unknown outcome")
 
-        self.logger.finish_run(outcome, self.branch_name, pr_url)
+        self.logger.finish_run(outcome, self.branch_name, pr_url, final_message)
+        print("\n" + self.token_tracker.get_summary())
 
         return AgentRunResult(
             run_id=self.run_id,
