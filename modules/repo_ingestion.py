@@ -54,6 +54,10 @@ SECRET_FILE_PATTERNS = (
 MAX_FILE_SIZE_BYTES = 512 * 1024  # 512 KB per file
 MAX_TOTAL_BYTES = 8 * 1024 * 1024  # 8 MB total repo budget
 
+# Files read concurrently per batch. Caps peak memory at roughly one batch of
+# file contents instead of the whole repository.
+READ_BATCH_SIZE = 64
+
 SECRET_PATTERNS = [
     re.compile(r"sk-ant-[a-zA-Z0-9_-]{40,}"), # Anthropic API Key
     re.compile(r"sk-[a-zA-Z0-9]{48}"),         # OpenAI API Key
@@ -300,35 +304,54 @@ def ingest_repository(repo_root: str) -> Repository:
             return None
         return content, abs_path, len(content.encode("utf-8"))
 
-    # Parallel file reading
+    # Read in bounded batches rather than submitting every candidate at once.
+    #
+    # Submitting all of them holds the entire repository in memory before the
+    # budget is ever consulted -- a 141 MB checkout peaked at 166 MB RSS to keep
+    # the 8 MB the budget allows, and that scales with the repository rather
+    # than with the budget. Batching caps the excess at one batch, and the
+    # budget check now stops the walk instead of reading the remainder and
+    # discarding it.
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(_process_file, abs_p, rel_p): rel_p for abs_p, rel_p in candidates}
-        for future in futures:
-            rel_p = futures[future]
-            res = future.result()
-            if res is None:
-                repo.skipped.append(rel_p)
-                continue
-            content, abs_path, size = res
+        for start in range(0, len(candidates), READ_BATCH_SIZE):
+            if repo.total_bytes >= MAX_TOTAL_BYTES:
+                repo.skipped.extend(
+                    f"{rel} (repo budget exhausted)"
+                    for _, rel in candidates[start:]
+                )
+                break
 
-            if repo.total_bytes + size > MAX_TOTAL_BYTES:
-                repo.skipped.append(f"{rel_p} (repo budget exhausted)")
-                continue
+            batch = candidates[start:start + READ_BATCH_SIZE]
+            futures = {
+                executor.submit(_process_file, abs_p, rel_p): rel_p
+                for abs_p, rel_p in batch
+            }
+            for future in futures:
+                rel_p = futures[future]
+                res = future.result()
+                if res is None:
+                    repo.skipped.append(rel_p)
+                    continue
+                content, abs_path, size = res
 
-            ext = Path(abs_path).suffix.lower()
-            checksum = hashlib.sha256(content.encode()).hexdigest()[:16]
+                if repo.total_bytes + size > MAX_TOTAL_BYTES:
+                    repo.skipped.append(f"{rel_p} (repo budget exhausted)")
+                    continue
 
-            record = FileRecord(
-                path=rel_p,
-                abs_path=abs_path,
-                content=content,
-                size=size,
-                extension=ext,
-                language=infer_language(abs_path),
-                checksum=checksum,
-            )
-            repo.files.append(record)
-            repo.total_bytes += size
+                ext = Path(abs_path).suffix.lower()
+                checksum = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+                record = FileRecord(
+                    path=rel_p,
+                    abs_path=abs_path,
+                    content=content,
+                    size=size,
+                    extension=ext,
+                    language=infer_language(abs_path),
+                    checksum=checksum,
+                )
+                repo.files.append(record)
+                repo.total_bytes += size
 
     return repo
 
