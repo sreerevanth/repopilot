@@ -89,6 +89,8 @@ Examples:
                         help="Directory for file backups (default: backups/ inside repo)")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Skip confirmation prompts (useful for CI/CD)")
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
@@ -150,6 +152,9 @@ def main():
         # Dirs
         backup_dir=args.backup_dir,
         log_dir=args.log_dir,
+
+        # CLI behavior
+        yes=args.yes or os.environ.get("CI") == "true",
 
         # Context
         force_include_paths=args.include,
