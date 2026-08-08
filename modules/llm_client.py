@@ -22,7 +22,7 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
 
 # Price per million tokens (input_price, output_price)
