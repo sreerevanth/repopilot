@@ -277,6 +277,38 @@ def _end_progress(chars: int) -> None:
     sys.stderr.flush()
 
 
+def _redact_secrets(text: str) -> str:
+    """
+    Mask anything matching a known secret pattern before it is printed.
+
+    --verbose dumps the full prompt, which is repository file contents. If a
+    key is committed somewhere in the repo it would otherwise be echoed to the
+    terminal and into whatever captures that output. Reuses the patterns from
+    secret_scanner so the two cannot drift apart.
+    """
+    from modules.secret_scanner import SECRET_PATTERNS
+
+    for pattern in SECRET_PATTERNS:
+        text = re.sub(
+            pattern["regex"],
+            lambda m: m.group(0)[:4] + "[REDACTED]",
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
+
+
+def _dump_payload(label: str, body: str, redact: bool = True) -> None:
+    """Print one labelled payload to stderr, so stdout stays parseable."""
+    if redact:
+        body = _redact_secrets(body)
+    rule = "=" * 72
+    print(f"\n{rule}\n[verbose] {label} ({len(body):,} chars)\n{rule}",
+          file=sys.stderr)
+    print(body, file=sys.stderr)
+    print(rule, file=sys.stderr, flush=True)
+
+
 class BudgetExceededError(RuntimeError):
     """
     Raised when accumulated spend reaches the configured --max-cost.
@@ -297,8 +329,9 @@ class BaseLLMClient:
     methods that went with it.
     """
 
-    def __init__(self, model: str = MODEL):
+    def __init__(self, model: str = MODEL, verbose: bool = False):
         self.model = model
+        self.verbose = verbose
         self.input_tokens_used = 0
         self.output_tokens_used = 0
         self.total_cost = 0.0
@@ -380,7 +413,12 @@ class BaseLLMClient:
     def initial_request(self, task: str, context_str: str) -> LLMResponse:
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
         input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
+        if self.verbose:
+            _dump_payload("system prompt", SYSTEM_PROMPT)
+            _dump_payload("request", prompt)
         raw = self._call(prompt)
+        if self.verbose:
+            _dump_payload("response", raw)
         return self._parse_response(raw, input_tok)
 
     def retry_request(
@@ -406,7 +444,12 @@ class BaseLLMClient:
             context=context_str,
         )
         input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
+        if self.verbose:
+            _dump_payload("system prompt", SYSTEM_PROMPT)
+            _dump_payload("request", prompt)
         raw = self._call(prompt)
+        if self.verbose:
+            _dump_payload("response", raw)
         return self._parse_response(raw, input_tok)
 
 
@@ -577,8 +620,9 @@ class OllamaClient(BaseLLMClient):
 class LLMClient(BaseLLMClient):
     """Facade class maintaining backward compatibility while wrapping dynamic clients."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = MODEL, provider: str = "anthropic"):
-        super().__init__(model)
+    def __init__(self, api_key: Optional[str] = None, model: str = MODEL,
+                 provider: str = "anthropic", verbose: bool = False):
+        super().__init__(model, verbose)
         self.provider = provider.lower()
         if self.provider == "openai":
             self.underlying_client = OpenAIClient(api_key, model)
@@ -588,6 +632,10 @@ class LLMClient(BaseLLMClient):
             self.underlying_client = OllamaClient(model)
         else:
             self.underlying_client = AnthropicClient(api_key, model)
+
+        # Set once after the chain rather than in each branch: the flag applies
+        # to whichever provider was chosen, and one line cannot drift.
+        self.underlying_client.verbose = verbose
 
     def _call(self, prompt: str) -> str:
         return self.underlying_client._call(prompt)
