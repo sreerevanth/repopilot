@@ -31,6 +31,7 @@ from modules.llm_client import (
 )
 from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import (
+    PRE_COMMIT_CONFIG,
     ExecutionResult,
     SubprocessSandbox,
     coverage_args,
@@ -68,6 +69,7 @@ class AgentConfig:
     run_file_runner: str = "python"
     coverage: bool = False                 # measure coverage and feed drops back
     coverage_source: str = "."             # what --cov points at
+    run_pre_commit: bool = True            # run repo hooks before tests if configured
     lint_runner: Optional[str] = None      # run a linter before the test suite
     lint_args: list[str] = field(default_factory=list)
     timeout_seconds: int = 120
@@ -714,6 +716,33 @@ class AutonomousAgent:
 
             duration_apply = time.time() - phase
             phase = time.time()
+            # Pre-commit before tests, when the repository configures it.
+            # Hooks that reformat leave the tree different from what the model
+            # wrote, so this has to run before anything is measured -- otherwise
+            # tests pass against code the hooks would then rewrite.
+            if cfg.run_pre_commit and last_changes:
+                config_path = os.path.join(cfg.repo_root, PRE_COMMIT_CONFIG)
+                if os.path.isfile(config_path):
+                    changed = [c.path for c in last_changes]
+                    hook_result = self.sandbox.run_pre_commit(changed)
+                    self.logger.log_execution(hook_result)
+                    if not hook_result.success and hook_result.exit_code != -3:
+                        self.logger.warning(
+                            "  pre-commit hooks failed; retrying with their output."
+                        )
+                        last_exec = hook_result
+                        iter_record.execution_command = hook_result.command
+                        iter_record.execution_exit_code = hook_result.exit_code
+                        iter_record.execution_stdout = hook_result.stdout[:2000]
+                        iter_record.execution_stderr = hook_result.stderr[:2000]
+                        iter_record.execution_success = False
+                        _stamp_timings(
+                            iter_record, iter_started, duration_ingest,
+                            duration_context, duration_llm, duration_apply, phase,
+                        )
+                        self.logger.record_iteration(iter_record)
+                        continue
+
             # ── Step 5: Execute ──
             # Lint first when configured. A syntax error surfaces in under a
             # second with a precise location, instead of arriving as a pytest

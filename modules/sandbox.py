@@ -117,6 +117,8 @@ ALLOWED_RUNNERS = {
 # and since the model cannot fix what it did not write, the gate would loop
 # until max_iterations on every run. E9 is syntax errors, F is pyflakes
 # (undefined names, unused imports). Widen it per project with --lint-args.
+PRE_COMMIT_CONFIG = ".pre-commit-config.yaml"
+
 ALLOWED_LINTERS = {
     "ruff": [sys.executable, "-m", "ruff", "check", "--select", "E9,F", "."],
     "flake8": [sys.executable, "-m", "flake8", "--select=E9,F63,F7,F82", "."],
@@ -635,6 +637,72 @@ class SubprocessSandbox:
             timed_out=timed_out,
             duration_seconds=time.time() - started,
         )
+
+    def run_pre_commit(
+        self,
+        files: list[str],
+        config: str = PRE_COMMIT_CONFIG,
+    ) -> ExecutionResult:
+        """
+        Run the repository's pre-commit hooks against the changed files.
+
+        Hooks fall into two kinds and pre-commit reports both as "Failed":
+
+        - **auto-fixing** (black, isort, trailing-whitespace) rewrite the file
+          and exit non-zero to say they did something. Nothing is wrong; the
+          code is now formatted.
+        - **checking** (check-yaml, flake8) exit non-zero because something is
+          actually wrong.
+
+        Treating the first as a failure would send the agent back to fix code
+        that a hook just fixed for it. The two are told apart by running again:
+        an auto-fix passes the second time, a genuine failure does not.
+        """
+        if not shutil.which("pre-commit"):
+            return ExecutionResult(
+                command="pre-commit",
+                exit_code=-3,
+                stdout="",
+                stderr="pre-commit is not installed. Run: pip install pre-commit",
+                timed_out=False,
+                duration_seconds=0.0,
+            )
+        if not files:
+            return ExecutionResult(
+                command="pre-commit (no files)",
+                exit_code=0,
+                stdout="No changed files to check.",
+                stderr="",
+                timed_out=False,
+                duration_seconds=0.0,
+            )
+
+        command = ["pre-commit", "run", "--config", config, "--files", *files]
+        first = self.run(command)
+        if first.success:
+            return first
+
+        # Non-zero: re-run to find out which kind it was.
+        second = self.run(command)
+        if second.success:
+            _LOG.info(
+                "pre-commit modified %d file(s) and now passes; continuing.",
+                len(files),
+            )
+            return ExecutionResult(
+                command=" ".join(command),
+                exit_code=0,
+                stdout=(
+                    "[pre-commit] Hooks reformatted the changed files and now "
+                    "pass. The rewritten files are what will be tested.\n\n"
+                    + first.stdout
+                ),
+                stderr="",
+                timed_out=False,
+                duration_seconds=first.duration_seconds + second.duration_seconds,
+            )
+
+        return second
 
     def run_lint(
         self,

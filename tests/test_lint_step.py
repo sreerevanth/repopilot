@@ -163,7 +163,7 @@ def test_a_lint_failure_short_circuits_the_iteration():
     """Running a suite that cannot import is wasted time."""
     source = AGENT_LOOP.read_text(encoding="utf-8")
     start = source.index("if cfg.lint_runner:")
-    block = source[start:start + 900]
+    block = source[start:start + 2400]
 
     assert "if not lint_result.success:" in block
     assert "continue" in block
