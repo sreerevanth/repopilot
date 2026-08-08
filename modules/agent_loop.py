@@ -29,7 +29,12 @@ from modules.llm_client import (
     LLMResponse,
 )
 from modules.code_modifier import CodeModificationEngine, ApplyResult
-from modules.sandbox import SubprocessSandbox, ExecutionResult
+from modules.sandbox import (
+    ExecutionResult,
+    SubprocessSandbox,
+    coverage_args,
+    parse_coverage_percent,
+)
 from modules.git_integration import GitIntegration
 from modules.logger import AgentLogger, IterationRecord
 
@@ -54,6 +59,8 @@ class AgentConfig:
     skip_tests: bool = False               # accept the LLM's own verdict instead
     run_file: Optional[str] = None         # run a specific file instead of tests
     run_file_runner: str = "python"
+    coverage: bool = False                 # measure coverage and feed drops back
+    coverage_source: str = "."             # what --cov points at
     lint_runner: Optional[str] = None      # run a linter before the test suite
     lint_args: list[str] = field(default_factory=list)
     timeout_seconds: int = 120
@@ -157,9 +164,14 @@ class AutonomousAgent:
         """Run tests or the specified file in the sandbox."""
         cfg = self.config
         if cfg.run_file:
+            # --run-file executes one script; --cov would report on the wrong
+            # thing, so coverage is deliberately not applied here.
             return self.sandbox.run_file(cfg.run_file, cfg.run_file_runner)
-        else:
-            return self.sandbox.run_tests(cfg.test_runner, cfg.test_args)
+
+        extra = list(cfg.test_args or [])
+        if cfg.coverage and not cfg.run_file:
+            extra += coverage_args(cfg.coverage_source)
+        return self.sandbox.run_tests(cfg.test_runner, extra)
 
     # Cap the review diff so a large refactor cannot flood the terminal.
     _MAX_DIFF_LINES = 400
@@ -298,6 +310,22 @@ class AutonomousAgent:
         outcome = "failed"
         self.pr_url = None
         iterations_used = 0
+
+        baseline_coverage: Optional[float] = None
+        if cfg.coverage:
+            # Measured before the model touches anything, so a first-iteration
+            # regression is still caught.
+            baseline_run = self._run_execution()
+            baseline_coverage = parse_coverage_percent(
+                baseline_run.stdout + baseline_run.stderr
+            )
+            if baseline_coverage is None:
+                self.logger.warning(
+                    "  --coverage is on but no coverage total was found. Is "
+                    "pytest-cov installed? Continuing without the gate."
+                )
+            else:
+                self.logger.info(f"  Baseline coverage: {baseline_coverage:.1f}%")
 
         for iteration in range(1, cfg.max_iterations + 1):
             iterations_used = iteration
@@ -547,6 +575,24 @@ class AutonomousAgent:
             iter_record.execution_success = exec_result.success
 
             self.logger.record_iteration(iter_record)
+
+            if cfg.coverage and exec_result.success:
+                current = parse_coverage_percent(
+                    exec_result.stdout + exec_result.stderr
+                )
+                drop = self._coverage_feedback(baseline_coverage, current)
+                if drop:
+                    self.logger.warning(f"  {drop}")
+                    exec_result = ExecutionResult(
+                        command=exec_result.command + "  [coverage gate]",
+                        exit_code=1,
+                        stdout=exec_result.stdout,
+                        stderr=(exec_result.stderr + "\n\n" + drop).strip(),
+                        timed_out=False,
+                        duration_seconds=exec_result.duration_seconds,
+                    )
+                elif current is not None:
+                    self.logger.info(f"  Coverage: {current:.1f}%")
 
             # ── Step 6: Success check ──
             if exec_result.success:

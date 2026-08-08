@@ -11,6 +11,7 @@ Runs code in isolation using subprocess with:
 import atexit
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -326,6 +327,28 @@ def _docker_is_usable(probe_timeout: int = 15) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0
+
+
+# pytest-cov writes a total to stdout as "TOTAL ... 87%". Parsing that is
+# cheaper and more portable than requiring a coverage.json, and it works with
+# whatever coverage config the project already has.
+_COVERAGE_TOTAL = re.compile(r"^TOTAL\s+.*?(\d+(?:\.\d+)?)%", re.MULTILINE)
+
+
+def parse_coverage_percent(output: str) -> Optional[float]:
+    """Extract the total coverage percentage from a pytest-cov report."""
+    matches = _COVERAGE_TOTAL.findall(output or "")
+    if not matches:
+        return None
+    try:
+        return float(matches[-1])
+    except ValueError:
+        return None
+
+
+def coverage_args(source_dir: str = ".") -> list[str]:
+    """Arguments that make pytest emit a terminal coverage total."""
+    return [f"--cov={source_dir}", "--cov-report=term"]
 
 
 def _coerce_output(value) -> str:

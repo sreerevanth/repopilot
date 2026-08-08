@@ -67,6 +67,11 @@ Examples:
     parser.add_argument("--run-file-runner", default="python",
                         choices=["python", "node", "ruby", "bash"],
                         help="Runner for --run-file (default: python)")
+    parser.add_argument("--coverage", action="store_true",
+                        help="Measure test coverage and fail an iteration that "
+                             "lowers it. Requires pytest-cov.")
+    parser.add_argument("--coverage-source", default=".", metavar="PATH",
+                        help="What --cov points at (default: .)")
     parser.add_argument("--lint", dest="lint_runner", default=None,
                         choices=["ruff", "flake8", "pyflakes", "eslint", "tsc",
                                  "govet", "clippy"],
@@ -236,6 +241,8 @@ def main():
         skip_tests=args.skip_tests,
         run_file=args.run_file,
         run_file_runner=args.run_file_runner,
+        coverage=args.coverage,
+        coverage_source=args.coverage_source,
         lint_runner=args.lint_runner,
         lint_args=args.lint_args,
         timeout_seconds=args.timeout,
