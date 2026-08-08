@@ -69,6 +69,7 @@ class AgentConfig:
     model: Optional[str] = None
     provider: str = "anthropic"
     api_base_url: Optional[str] = None
+    stream: bool = False
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -106,6 +107,7 @@ class AutonomousAgent:
             api_key=cfg.anthropic_api_key,
             model=cfg.model,
             base_url=cfg.api_base_url,
+            stream=cfg.stream,
         )
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)

@@ -97,6 +97,10 @@ Examples:
     parser.add_argument("--api-base-url", default=None,
                         help="Custom API base URL (for Ollama or self-hosted endpoints)")
 
+    # Streaming
+    parser.add_argument("--stream", action="store_true",
+                        help="Enable streaming LLM output for real-time progress")
+
     return parser.parse_args()
 
 
@@ -149,6 +153,7 @@ def main():
         model=args.model,
         provider=args.provider,
         api_base_url=args.api_base_url,
+        stream=args.stream,
     )
 
     try:

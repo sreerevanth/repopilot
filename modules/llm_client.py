@@ -27,6 +27,7 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
+<<<<<<< HEAD
 try:
     import openai
     _OPENAI_AVAILABLE = True
@@ -50,7 +51,6 @@ DEFAULT_MODELS = {
     "gemini": "gemini-2.0-flash",
     "ollama": "llama3",
 }
-
 MAX_TOKENS = 8192
 
 # ─────────────────────────────────────────────
@@ -158,13 +158,42 @@ class LLMResponse:
 class BaseLLMClient:
     """Abstract base for LLM clients across providers."""
 
-    def __init__(self, model: Optional[str] = None, provider: str = "anthropic"):
+    def __init__(self, model: Optional[str] = None, provider: str = "anthropic", stream: bool = False):
         self.provider = provider
         self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODELS.get(provider, "")
+        self.stream = stream
 
     def _call(self, prompt: str, retries: int = 3) -> str:
         """Raw API call with retry. Subclasses must implement."""
         raise NotImplementedError
+
+    def _call_streaming(self, prompt: str, retries: int = 3) -> str:
+        """Streaming API call — prints tokens as they arrive."""
+        import sys
+        for attempt in range(retries):
+            try:
+                collected = []
+                print("\n  [LLM Streaming] ", end="", flush=True)
+                with self.client.messages.stream(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                ) as stream:
+                    for text in stream.text_stream:
+                        collected.append(text)
+                        # Print a dot every 50 chars for progress
+                        if sum(len(t) for t in collected) % 200 < len(text):
+                            sys.stdout.write(".")
+                            sys.stdout.flush()
+                print(" done", flush=True)
+                return "".join(collected)
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM streaming call failed after retries")
 
     def _parse_response(self, raw: str) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
@@ -248,8 +277,8 @@ class BaseLLMClient:
 class AnthropicLLMClient(BaseLLMClient):
     """LLM client using Anthropic Claude API."""
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        super().__init__(model=model, provider="anthropic")
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, stream: bool = False):
+        super().__init__(model=model, provider="anthropic", stream=stream)
         if not _ANTHROPIC_AVAILABLE:
             raise RuntimeError(
                 "anthropic package not installed. Run: pip install anthropic"
@@ -260,6 +289,8 @@ class AnthropicLLMClient(BaseLLMClient):
         self.client = anthropic.Anthropic(api_key=key)
 
     def _call(self, prompt: str, retries: int = 3) -> str:
+        if self.stream:
+            return self._call_streaming(prompt, retries)
         for attempt in range(retries):
             try:
                 response = self.client.messages.create(
@@ -414,6 +445,7 @@ def create_llm_client(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
+    stream: bool = False,
 ) -> BaseLLMClient:
     """
     Create an LLM client for the specified provider.
@@ -423,6 +455,7 @@ def create_llm_client(
         api_key: API key (or read from env vars).
         model: Model name (or use provider defaults).
         base_url: Custom API base URL (for Ollama or self-hosted).
+        stream: Whether to stream responses.
 
     Returns:
         A configured BaseLLMClient subclass instance.
@@ -430,7 +463,7 @@ def create_llm_client(
     provider = provider.lower().strip()
 
     if provider == "anthropic":
-        return AnthropicLLMClient(api_key=api_key, model=model)
+        return AnthropicLLMClient(api_key=api_key, model=model, stream=stream)
     elif provider == "openai":
         return OpenAILLMClient(api_key=api_key, model=model, base_url=base_url)
     elif provider == "gemini":
