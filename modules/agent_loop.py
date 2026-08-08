@@ -58,6 +58,7 @@ class AgentConfig:
 
     # Execution
     skip_tests: bool = False               # accept the LLM's own verdict instead
+    plan_first: bool = False               # ask for an approach before coding
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
     skip_tests: bool = False               # accept the LLM's own verdict instead
@@ -91,6 +92,7 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    resume_from: Optional[str] = None      # run_id to continue
     verbose_payloads: bool = False         # dump raw LLM request/response
     model: Optional[str] = None
     provider: str = "anthropic"

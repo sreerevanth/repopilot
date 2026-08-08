@@ -130,6 +130,11 @@ Examples:
                         help="Fast-forward RepoPilot's own checkout to the latest "
                              "upstream commit. Refuses on a dirty tree or a diverged "
                              "branch, and never installs packages for you.")
+    parser.add_argument("--resume", dest="resume_from", default=None, metavar="RUN_ID",
+                        help="Continue an interrupted run from its last completed "
+                             "iteration. Use --list-resumable to see candidates.")
+    parser.add_argument("--list-resumable", action="store_true",
+                        help="List run ids that can be resumed, then exit.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
     # API key
@@ -268,6 +273,7 @@ def main():
         # Dirs
         backup_dir=args.backup_dir,
         log_dir=args.log_dir,
+        resume_from=args.resume_from,
 
         # CLI behavior
 

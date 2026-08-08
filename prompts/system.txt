@@ -27,6 +27,7 @@ Return a JSON object with this exact schema:
 
 RULES:
 - For "modify" and "create": always provide the COMPLETE file content, not diffs or snippets.
+- For "patch": content should be a valid unified diff format.
 - For "delete": omit "content".
 - To move or rename a file, use "rename" with "new_path" — do NOT emit a "create"
   at the new path plus a "delete" at the old one. Include "content" with a rename

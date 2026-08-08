@@ -169,6 +169,32 @@ Keep the plan to at most 6 steps. If the task is unclear or the context is
 insufficient, say so in "risks" and set confidence below 0.4.
 """
 
+# The planning pass deliberately forbids code. Asking for a plan and changes in
+# one response produces changes with a plan-shaped preamble -- the model commits
+# to an approach and then justifies it, which is the opposite of planning.
+_BUILTIN_PLAN_PROMPT = """\
+## Task
+{task}
+
+## Repository Context
+{context}
+
+## Instructions
+Do NOT write any code yet. Work out how you would approach this task.
+
+Return ONLY a JSON object with this schema:
+
+{{
+  "plan": ["<step>", "<step>", ...],
+  "files_to_change": ["<relative path>", ...],
+  "risks": ["<what could go wrong or is unclear>", ...],
+  "confidence": <0.0-1.0 float>
+}}
+
+Keep the plan to at most 6 steps. If the task is unclear or the context is
+insufficient, say so in "risks" and set confidence below 0.4.
+"""
+
 _BUILTIN_RETRY_PROMPT = """\
 ## Task
 {task}
@@ -255,6 +281,7 @@ class LLMResponse:
 SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
 TASK_PROMPT_TEMPLATE = load_prompt("initial", _BUILTIN_TASK_PROMPT)
 RETRY_PROMPT_TEMPLATE = load_prompt("retry", _BUILTIN_RETRY_PROMPT)
+PLAN_PROMPT_TEMPLATE = load_prompt("plan", _BUILTIN_PLAN_PROMPT)
 PLAN_PROMPT_TEMPLATE = load_prompt("plan", _BUILTIN_PLAN_PROMPT)
 
 
@@ -409,6 +436,33 @@ class BaseLLMClient:
             output_tokens=output_tok,
             estimated_cost=cost
         )
+
+    def _parse_plan(self, raw: str) -> Plan:
+        text = raw.strip()
+        start, end = text.find("{"), text.rfind("}") + 1
+        if start == -1 or end == 0:
+            return Plan(raw, [], [], [], 0.0, f"No JSON object in plan: {raw[:200]}")
+        try:
+            data = json.loads(text[start:end])
+        except json.JSONDecodeError as exc:
+            return Plan(raw, [], [], [], 0.0, f"Plan JSON parse error: {exc}")
+
+        def as_list(key):
+            value = data.get(key) or []
+            return [str(v) for v in value] if isinstance(value, list) else []
+
+        return Plan(
+            raw=raw,
+            steps=as_list("plan"),
+            files_to_change=as_list("files_to_change"),
+            risks=as_list("risks"),
+            confidence=float(data.get("confidence", 0.5)),
+        )
+
+    def plan_request(self, task: str, context_str: str) -> Plan:
+        """Ask for an approach before any code is written."""
+        prompt = PLAN_PROMPT_TEMPLATE.format(task=task, context=context_str)
+        return self._parse_plan(self._call(prompt))
 
     def initial_request(self, task: str, context_str: str) -> LLMResponse:
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
