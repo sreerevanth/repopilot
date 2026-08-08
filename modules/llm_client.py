@@ -27,7 +27,6 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-<<<<<<< HEAD
 try:
     import openai
     _OPENAI_AVAILABLE = True
@@ -149,6 +148,8 @@ class LLMResponse:
     confidence: float
     done: bool
     parse_error: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -163,11 +164,11 @@ class BaseLLMClient:
         self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODELS.get(provider, "")
         self.stream = stream
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         """Raw API call with retry. Subclasses must implement."""
         raise NotImplementedError
 
-    def _call_streaming(self, prompt: str, retries: int = 3) -> str:
+    def _call_streaming(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         """Streaming API call — prints tokens as they arrive."""
         import sys
         for attempt in range(retries):
@@ -187,7 +188,9 @@ class BaseLLMClient:
                             sys.stdout.write(".")
                             sys.stdout.flush()
                 print(" done", flush=True)
-                return "".join(collected)
+                text = "".join(collected)
+                # Note: streaming doesn't provide token usage easily in this simple implementation
+                return text, 0, 0
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -195,7 +198,7 @@ class BaseLLMClient:
                 time.sleep(wait)
         raise RuntimeError("LLM streaming call failed after retries")
 
-    def _parse_response(self, raw: str) -> LLMResponse:
+    def _parse_response(self, raw: str, in_tokens: int = 0, out_tokens: int = 0) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
         # Strip any accidental markdown fences
         text = raw.strip()
@@ -209,7 +212,8 @@ class BaseLLMClient:
         if start == -1 or end == 0:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"No JSON object found in response: {raw[:300]}"
+                parse_error=f"No JSON object found in response: {raw[:300]}",
+                input_tokens=in_tokens, output_tokens=out_tokens,
             )
 
         try:
@@ -217,7 +221,8 @@ class BaseLLMClient:
         except json.JSONDecodeError as e:
             return LLMResponse(
                 raw=raw, analysis="", changes=[], confidence=0.0, done=False,
-                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}"
+                parse_error=f"JSON parse error: {e}\nText: {text[start:end][:500]}",
+                input_tokens=in_tokens, output_tokens=out_tokens,
             )
 
         changes = []
@@ -235,13 +240,15 @@ class BaseLLMClient:
             changes=changes,
             confidence=float(data.get("confidence", 0.5)),
             done=bool(data.get("done", False)),
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
         )
 
     def initial_request(self, task: str, context_str: str) -> LLMResponse:
         """First-pass: analyze task and produce code changes."""
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
-        raw = self._call(prompt)
-        return self._parse_response(raw)
+        raw, in_tok, out_tok = self._call(prompt)
+        return self._parse_response(raw, in_tok, out_tok)
 
     def retry_request(
         self,
@@ -266,8 +273,8 @@ class BaseLLMClient:
             stderr=stderr[:4000] if stderr else "(empty)",
             context=context_str,
         )
-        raw = self._call(prompt)
-        return self._parse_response(raw)
+        raw, in_tok, out_tok = self._call(prompt)
+        return self._parse_response(raw, in_tok, out_tok)
 
 
 # ─────────────────────────────────────────────
@@ -288,7 +295,7 @@ class AnthropicLLMClient(BaseLLMClient):
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.client = anthropic.Anthropic(api_key=key)
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         if self.stream:
             return self._call_streaming(prompt, retries)
         for attempt in range(retries):
@@ -299,7 +306,10 @@ class AnthropicLLMClient(BaseLLMClient):
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                return response.content[0].text
+                text = response.content[0].text
+                in_tok = response.usage.input_tokens
+                out_tok = response.usage.output_tokens
+                return text, in_tok, out_tok
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -334,7 +344,7 @@ class OpenAILLMClient(BaseLLMClient):
             kwargs["base_url"] = base_url
         self.client = openai.OpenAI(**kwargs)
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         for attempt in range(retries):
             try:
                 response = self.client.chat.completions.create(
@@ -345,7 +355,10 @@ class OpenAILLMClient(BaseLLMClient):
                         {"role": "user", "content": prompt},
                     ],
                 )
-                return response.choices[0].message.content
+                text = response.choices[0].message.content
+                in_tok = response.usage.prompt_tokens if response.usage else 0
+                out_tok = response.usage.completion_tokens if response.usage else 0
+                return text, in_tok, out_tok
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -376,7 +389,7 @@ class GeminiLLMClient(BaseLLMClient):
             system_instruction=SYSTEM_PROMPT,
         )
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         for attempt in range(retries):
             try:
                 response = self.genai_model.generate_content(
@@ -385,7 +398,10 @@ class GeminiLLMClient(BaseLLMClient):
                         max_output_tokens=MAX_TOKENS,
                     ),
                 )
-                return response.text
+                text = response.text
+                in_tok = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+                out_tok = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+                return text, in_tok, out_tok
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -417,7 +433,7 @@ class OllamaLLMClient(BaseLLMClient):
             base_url=base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1",
         )
 
-    def _call(self, prompt: str, retries: int = 3) -> str:
+    def _call(self, prompt: str, retries: int = 3) -> tuple[str, int, int]:
         for attempt in range(retries):
             try:
                 response = self.client.chat.completions.create(
@@ -427,7 +443,10 @@ class OllamaLLMClient(BaseLLMClient):
                         {"role": "user", "content": prompt},
                     ],
                 )
-                return response.choices[0].message.content
+                text = response.choices[0].message.content
+                in_tok = response.usage.prompt_tokens if response.usage else 0
+                out_tok = response.usage.completion_tokens if response.usage else 0
+                return text, in_tok, out_tok
             except Exception as e:
                 if attempt == retries - 1:
                     raise
@@ -484,3 +503,4 @@ def create_llm_client(
 class LLMClient(AnthropicLLMClient):
     """Backward-compatible alias for AnthropicLLMClient."""
     pass
+
