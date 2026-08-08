@@ -105,6 +105,10 @@ Examples:
                         help="Directory for file backups (default: backups/ inside repo)")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
+    parser.add_argument("--context-only", action="store_true",
+                        help="Print the compiled LLM context and exit, before any "
+                             "API call is made. Use it to check which files were "
+                             "selected without spending credits.")
     parser.add_argument("--dry-run", "-d", action="store_true",help="Preview changes without applying them. Saves a manifest to logs/.")
     parser.add_argument("--update", action="store_true",
                         help="Fast-forward RepoPilot's own checkout to the latest "
@@ -222,6 +226,7 @@ def main():
         repo_root=repo_root,
         task=task,
         dry_run=args.dry_run,
+        context_only=args.context_only,
         yes=yes_flag,
         interactive=args.interactive,
 

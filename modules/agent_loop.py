@@ -43,6 +43,7 @@ class AgentConfig:
     repo_root: str
     task: str
     dry_run: bool = False
+    context_only: bool = False             # print the compiled context and stop
     yes: bool = False
     interactive: bool = False   # pause for review after tests pass, before commit
 
@@ -85,7 +86,8 @@ class AgentConfig:
 @dataclass
 class AgentRunResult:
     run_id: str
-    outcome: str        # success | failed | max_retries | error | aborted | dry_run
+    outcome: str        # success | failed | max_retries | error | aborted
+                        #   | dry_run | context_only
     branch_name: Optional[str]
     pr_url: Optional[str]
     iterations_used: int
@@ -319,6 +321,30 @@ class AutonomousAgent:
             )
             self.logger.log_context([f.path for f in context.files], context.total_chars)
             context_str = context.render()
+
+            if cfg.context_only:
+                # Before the LLM call, so this costs nothing. --dry-run already
+                # exists but shows the *changes* the model proposed, which means
+                # it has already been paid for by the time you see anything.
+                print(context_str)
+                summary = (
+                    f"{len(context.files)} file(s), {context.total_chars:,} chars"
+                )
+                if getattr(context, "outlined", None):
+                    summary += f", {len(context.outlined)} outlined"
+                self.logger.info(f"  Context only: {summary}. No LLM call made.")
+                self.logger.finish_run("context_only", self.branch_name, None)
+                return AgentRunResult(
+                    run_id=self.run_id,
+                    outcome="context_only",
+                    branch_name=self.branch_name,
+                    pr_url=None,
+                    iterations_used=0,
+                    final_message=(
+                        f"Compiled context printed ({summary}). "
+                        f"No API call was made and no files were touched."
+                    ),
+                )
 
             # ── Step 3: Call LLM ──
             try:
