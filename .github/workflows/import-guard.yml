@@ -84,3 +84,67 @@ jobs:
 
           print(f"{len(flags)} CLI flags, no duplicates")
           PY
+
+      - name: Every args.X is registered
+        # main.py referenced args.list_resumable while the flag itself was lost
+        # in a merge. --help still passed, because argparse only fails on a flag
+        # it is asked for -- not on one the code reads and it never declared.
+        run: |
+          python - <<'PY'
+          import re, sys
+
+          source = open("main.py").read()
+          used = set(re.findall(r"args\.(\w+)", source))
+
+          declared = set(
+              re.findall(r'add_argument\([^)]*?dest="(\w+)"', source, re.S)
+          )
+          declared |= {
+              flag.replace("-", "_")
+              for flag in re.findall(r'add_argument\(\s*"--([a-z0-9-]+)"', source)
+          }
+
+          missing = sorted(used - declared)
+          for name in missing:
+              print(f"FAIL args.{name} is read but never registered")
+
+          if missing:
+              sys.exit(1)
+
+          print(f"{len(used)} args references, all registered")
+          PY
+
+      - name: AgentConfig accepts everything main.py passes
+        # main.py passed plan_first and resume_from after both fields were lost
+        # from the dataclass, so every run died with TypeError at construction.
+        run: |
+          python - <<'PY'
+          import dataclasses, re, sys
+
+          from modules.agent_loop import AgentConfig
+
+          fields = {f.name for f in dataclasses.fields(AgentConfig)}
+          source = open("main.py").read()
+          block = source[source.index("config = AgentConfig("):]
+          block = block[: block.index("\n    )")]
+          passed = set(re.findall(r"^\s+(\w+)=", block, re.MULTILINE))
+
+          missing = sorted(passed - fields)
+          for name in missing:
+              print(f"FAIL main.py passes {name}=, AgentConfig has no such field")
+
+          if missing:
+              sys.exit(1)
+
+          print(f"{len(passed)} config arguments, all accepted")
+          PY
+
+      - name: Smoke run
+        # The check the guard was missing. --context-only compiles the context
+        # and returns before any provider call, so this exercises argparse,
+        # config construction, ingestion, context building and the run summary
+        # without an API key and without spending anything.
+        run: |
+          python main.py --repo . --task "smoke" --no-git --context-only > /tmp/smoke.txt
+          tail -5 /tmp/smoke.txt
+          grep -q "No API call was made" /tmp/smoke.txt
