@@ -17,7 +17,7 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
 
 # ─────────────────────────────────────────────
@@ -123,7 +123,7 @@ class LLMResponse:
 # ─────────────────────────────────────────────
 
 class LLMClient:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, stream: bool = False):
         if not _ANTHROPIC_AVAILABLE:
             raise RuntimeError(
                 "anthropic package not installed. Run: pip install anthropic"
@@ -132,13 +132,17 @@ class LLMClient:
         if not key:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.client = anthropic.Anthropic(api_key=key)
+        self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODEL
+        self.stream = stream
 
     def _call(self, prompt: str, retries: int = 3) -> str:
         """Raw API call with retry on transient errors."""
+        if self.stream:
+            return self._call_streaming(prompt, retries)
         for attempt in range(retries):
             try:
                 response = self.client.messages.create(
-                    model=MODEL,
+                    model=self.model,
                     max_tokens=MAX_TOKENS,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
@@ -150,6 +154,34 @@ class LLMClient:
                 wait = 2 ** attempt
                 time.sleep(wait)
         raise RuntimeError("LLM call failed after retries")
+
+    def _call_streaming(self, prompt: str, retries: int = 3) -> str:
+        """Streaming API call — prints tokens as they arrive."""
+        import sys
+        for attempt in range(retries):
+            try:
+                collected = []
+                print("\n  [LLM Streaming] ", end="", flush=True)
+                with self.client.messages.stream(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                ) as stream:
+                    for text in stream.text_stream:
+                        collected.append(text)
+                        # Print a dot every 50 chars for progress
+                        if sum(len(t) for t in collected) % 200 < len(text):
+                            sys.stdout.write(".")
+                            sys.stdout.flush()
+                print(" done", flush=True)
+                return "".join(collected)
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM streaming call failed after retries")
 
     def _parse_response(self, raw: str) -> LLMResponse:
         """Extract and parse JSON from LLM output."""

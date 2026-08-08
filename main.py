@@ -90,6 +90,10 @@ Examples:
     parser.add_argument("--api-key", default=None,
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
+    # Streaming
+    parser.add_argument("--stream", action="store_true",
+                        help="Enable streaming LLM output for real-time progress")
+
     return parser.parse_args()
 
 
@@ -139,6 +143,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        stream=args.stream,
     )
 
     try:
