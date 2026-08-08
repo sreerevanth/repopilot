@@ -342,6 +342,11 @@ python main.py --repo . --task "Fix the parser" --lint ruff
 - Iterates up to `max_iterations` times.
 - On success: commits (optionally pushes + opens PR).
 - On failure: rolls back all file changes.
+- `--skip-tests` bypasses the sandbox entirely and accepts changes on the
+  model's confidence alone. Useful for refactors and comment passes where there
+  is nothing to assert; unsuitable for behaviour changes. The recorded result
+  says plainly that no suite ran, so a log cannot be mistaken for evidence that
+  tests passed.
 - Produces a `AgentRunResult` with outcome, branch, PR URL, iteration count.
 
 ### Module 7 — `git_integration.py`
