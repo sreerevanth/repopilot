@@ -20,6 +20,7 @@ from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.notify import notify_run_complete
 from modules.code_modifier import CodeModificationEngine
+from modules.updater import run_update
 from modules.task_source import (
     TaskResolutionError,
     looks_like_issue_url,
@@ -187,6 +188,13 @@ def main():
                         setattr(args, k, v)
         except Exception as e:
             print(f"Warning: Failed to load config file {config_file}: {e}", file=sys.stderr)
+
+    if args.update:
+        sys.exit(run_update(assume_yes=args.yes))
+
+    if not args.repo:
+        print("ERROR: --repo is required (except with --update).", file=sys.stderr)
+        sys.exit(2)
 
     repo_root = os.path.abspath(args.repo)
     if args.rollback:
