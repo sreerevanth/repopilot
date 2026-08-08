@@ -376,6 +376,7 @@ python main.py --repo . --task "Fix the failing parser test"
 
 ---
 
+
 ### `dashboard.py` — run viewer
 
 Renders a run log as a readable timeline — the model's analysis, its file
@@ -393,6 +394,42 @@ It reads the JSONL `logger.py` already writes rather than being instrumented
 into the loop. That keeps it decoupled: it works on a finished run, on a run in
 another terminal, and needs no changes to `agent_loop.py`. It also means no web
 server and no new dependency. Colour is disabled off a tty and by `NO_COLOR`.
+
+## Container Cleanup
+
+Every container `DockerSandbox` starts is given a unique `--name` and a
+`com.repopilot.sandbox` label, and is force-removed if the run does not end
+cleanly.
+
+`--rm` alone is not enough. The daemon honours it when a container _exits_, and
+on timeout `subprocess.run` kills the docker **CLI** with `SIGKILL` — a signal
+that cannot be caught, so it is never proxied to the container. The container
+keeps running, still holding its memory and CPU reservation, and never exits, so
+`--rm` never fires. Ctrl+C has the same shape: `KeyboardInterrupt` is a
+`BaseException`, which an `except Exception` would miss.
+
+Both paths now issue an explicit `docker rm --force`. A successful run does not,
+since `--rm` has already handled it.
+
+`DockerSandbox` also works as a context manager:
+
+```python
+with DockerSandbox(repo) as sandbox:
+    result = sandbox.run_tests("pytest")
+# any container this instance started is removed on the way out
+```
+
+For the case nothing in-process can cover — SIGKILL, or the machine losing
+power — there is an explicit sweep:
+
+```python
+DockerSandbox.sweep_orphaned_containers()   # returns the ids removed
+```
+
+It is deliberately not automatic. A sweep cannot tell a leaked container from
+one belonging to another agent running right now, so the decision stays with the
+caller.
+
 
 ---
 
