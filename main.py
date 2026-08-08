@@ -111,6 +111,18 @@ Examples:
     parser.add_argument("--api-key", default=None,
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
 
+    # Model configuration
+    parser.add_argument("--model", default=None,
+                        help="LLM model name to use (default: claude-sonnet-4-20250514)")
+
+    # Provider configuration
+    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "openai", "gemini", "ollama"],
+                        help="LLM provider to use (default: anthropic)")
+
+    # Config file support
+    parser.add_argument("--config", default=None,
+                        help="Path to configuration JSON file (default: .repopilot.json in repo root)")
+
     # Non-interactive / CI
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
@@ -222,6 +234,8 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        model=args.model,
+        provider=args.provider,
     )
 
     try:
