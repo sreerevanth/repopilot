@@ -27,6 +27,7 @@ from modules.code_modifier import CodeModificationEngine, ApplyResult
 from modules.sandbox import SubprocessSandbox, ExecutionResult
 from modules.git_integration import GitIntegration
 from modules.logger import AgentLogger, IterationRecord
+from modules.secret_scanner import scan_directory, format_findings
 
 
 # ─────────────────────────────────────────────
@@ -133,6 +134,18 @@ class AutonomousAgent:
         """Stage and commit the modified files."""
         if not self.git:
             return True  # No git; just pretend it worked.
+
+        # Secret scan before committing
+        findings = scan_directory(self.config.repo_root, paths=changed_paths)
+        if findings:
+            report = format_findings(findings)
+            self.logger.warning(report)
+            high_findings = [f for f in findings if f.severity == "high"]
+            if high_findings:
+                self.logger.warning(
+                    f"  {len(high_findings)} HIGH severity secret(s) detected! "
+                    f"Review before pushing."
+                )
 
         stage = self.git.stage_files(changed_paths)
         self.logger.log_git("stage", stage)
