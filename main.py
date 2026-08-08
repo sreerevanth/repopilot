@@ -116,6 +116,9 @@ Examples:
                         help="Directory for log files (default: logs/ inside repo)")
     parser.add_argument("--backup-dir", default="backups",
                         help="Directory for file backups (default: backups/ inside repo)")
+    parser.add_argument("--verbose", dest="verbose_payloads", action="store_true",
+                        help="Print the exact prompt sent to the LLM and the raw "
+                             "response, to stderr. Known secret patterns are masked.")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress verbose output")
     parser.add_argument("--context-only", action="store_true",
@@ -273,6 +276,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        verbose_payloads=args.verbose_payloads,
         model=args.model,
         provider=args.provider,
     )
