@@ -71,6 +71,10 @@ Examples:
                              "lowers it. Requires pytest-cov.")
     parser.add_argument("--coverage-source", default=".", metavar="PATH",
                         help="What --cov points at (default: .)")
+    parser.add_argument("--no-pre-commit", dest="run_pre_commit",
+                        action="store_false", default=True,
+                        help="Skip the repository's pre-commit hooks even when "
+                             ".pre-commit-config.yaml is present.")
     parser.add_argument("--lint", dest="lint_runner", default=None,
                         choices=["ruff", "flake8", "pyflakes", "eslint", "tsc",
                                  "govet", "clippy"],
@@ -264,6 +268,7 @@ def main():
         run_file_runner=args.run_file_runner,
         coverage=args.coverage,
         coverage_source=args.coverage_source,
+        run_pre_commit=args.run_pre_commit,
         lint_runner=args.lint_runner,
         lint_args=args.lint_args,
         timeout_seconds=args.timeout,
