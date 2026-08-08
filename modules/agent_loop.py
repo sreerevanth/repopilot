@@ -36,6 +36,7 @@ from modules.sandbox import (
     parse_coverage_percent,
 )
 from modules.git_integration import GitIntegration
+from modules.doc_lookup import perform_lookups, render_lookups
 from modules.logger import AgentLogger, IterationRecord
 
 
