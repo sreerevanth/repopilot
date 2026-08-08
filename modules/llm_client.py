@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 import time
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Any
 
 _LOG = logging.getLogger("agent.llm_client")
@@ -246,6 +246,10 @@ class LLMResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost: float = 0.0
+    # _parse_response populates this (the doc-lookup feature). The field was
+    # lost in a merge while the parser kept passing it, so every call raised
+    # TypeError at runtime -- past the point an import check would notice.
+    lookups: list = field(default_factory=list)
 
 
 SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
