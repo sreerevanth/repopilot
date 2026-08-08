@@ -27,6 +27,13 @@ RENAME_ACTIONS = ("rename", "move")
 VALID_ACTIONS = ("modify", "create", "delete", "patch") + RENAME_ACTIONS
 
 
+# "rename" is the canonical name; "move" is accepted because it is the word a
+# model is just as likely to reach for, and rejecting it would send the agent
+# back around the loop for a synonym.
+RENAME_ACTIONS = ("rename", "move")
+VALID_ACTIONS = ("modify", "create", "delete", "patch") + RENAME_ACTIONS
+
+
 @dataclass
 class ApplyResult:
     path: str
