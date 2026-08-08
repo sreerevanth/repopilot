@@ -108,6 +108,9 @@ Examples:
                         help="Prefix for the auto-created branch name (default: agent)")
 
     # Context
+    parser.add_argument("--context-budget", type=int, default=None, metavar="CHARS",
+                        help="Characters of repository context to send. Derived "
+                             "from the model's context window when not set.")
     parser.add_argument("--include", nargs="*", default=None,
                         help="Force-include specific file paths in context (relative to repo root)")
 
@@ -279,6 +282,7 @@ def main():
 
         # Context
         force_include_paths=args.include,
+        context_budget=args.context_budget,
 
         # LLM
         anthropic_api_key=args.api_key,
