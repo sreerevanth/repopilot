@@ -55,7 +55,10 @@ class AgentConfig:
     git_enabled: bool = True
     git_branch_prefix: str = "agent"
     git_base_branch: str = "main"
-    git_commit_author: str = "Agent Bot <agent@autonomous.dev>"
+    git_commit_author: str = "RepoPilot Agent <agent@repopilot.local>"
+
+    # CLI behavior
+    yes: bool = False
     git_push: bool = False                  # push to remote?
     git_create_pr: bool = False             # create GitHub PR?
 
@@ -296,8 +299,9 @@ class AutonomousAgent:
                         pr_url=None,
                     )
 
-                if not ask_confirmation(len(llm_resp.changes)):
-                    return AgentRunResult(
+                if not self.config.yes:
+                    if not ask_confirmation(len(llm_resp.changes)):
+                        return AgentRunResult(
                         outcome="aborted",
                         run_id=self.run_id,
                         iterations_used=iteration,
