@@ -388,7 +388,6 @@ python main.py --repo . --task "Fix the failing parser test"
 
 ---
 
-
 ### `dashboard.py` — run viewer
 
 Renders a run log as a readable timeline — the model's analysis, its file
@@ -441,7 +440,6 @@ DockerSandbox.sweep_orphaned_containers()   # returns the ids removed
 It is deliberately not automatic. A sweep cannot tell a leaked container from
 one belonging to another agent running right now, so the decision stays with the
 caller.
-
 
 ---
 
@@ -505,6 +503,131 @@ To check the flags against a real daemon rather than trusting the argv:
 
 ```bash
 python scripts/verify_docker_sandbox.py
+```
+
+---
+
+## Troubleshooting
+
+Problems people hit in practice, with the exact message each one produces.
+
+### `ValueError: ANTHROPIC_API_KEY not set`
+
+The key is read from the environment at client construction.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # macOS / Linux
+setx ANTHROPIC_API_KEY "sk-ant-..."        # Windows, new shell required
+```
+
+`--api-key` works too, but a key on the command line lands in your shell
+history. For a different provider, `--provider openai|gemini|ollama` reads that
+provider's own variable instead.
+
+### `RuntimeError: anthropic package not installed`
+
+```bash
+pip install -r requirements.txt
+```
+
+### `ERROR: --repo is required (except with --update)`
+
+Every run needs a target repository. `--update` is the one exception, since it
+operates on RepoPilot's own checkout.
+
+### Docker is installed but the sandbox is not isolated
+
+The log says:
+
+```
+DockerSandbox: Docker is unavailable (no CLI on PATH, or no daemon answering).
+Network isolation, the 512MB memory cap and the 1-CPU limit are NOT in effect.
+```
+
+Docker Desktop installed but not _running_ is the usual cause — the binary is on
+PATH, so a presence check passes while the daemon does not answer. Start Docker
+Desktop, or on Linux add yourself to the `docker` group:
+
+```bash
+sudo usermod -aG docker $USER      # log out and back in
+```
+
+Pass `strict=True` to `DockerSandbox` to make an unavailable daemon an error
+rather than a silent fallback.
+
+### Tests "fail" but the code is fine
+
+If the runner itself is missing, its failure looks like a failing suite. A
+missing pytest now falls back to running test files with `python` and says so:
+
+```
+[fallback] pytest was unavailable; ran 3 file(s) with python instead.
+```
+
+Install the runner, or point `--runner` at one that exists. `--runner` accepts
+`pytest`, `npm_test`, `vitest`, `jest`, `go`, `cargo`, `ruby`, `rspec`, `bash`
+and `make`.
+
+### `Runner '<name>' not found or not allowed`
+
+The name is not in `ALLOWED_RUNNERS`, or its executable is not on PATH. The
+allowlist is deliberate — arbitrary commands are not accepted.
+
+### The agent burns iterations without converging
+
+Check what it actually saw before blaming the model:
+
+```bash
+python main.py --repo . --task "..." --context-only     # no API call, no cost
+python main.py --repo . --task "..." --verbose          # exact prompt and response
+```
+
+`--context-only` prints the compiled context and exits, so you can confirm the
+right files were selected without spending anything. `--verbose` prints the
+prompt and the raw reply, with known secret patterns masked.
+
+### Runs cost more than expected
+
+```bash
+python main.py --repo . --task "..." --max-cost 1.00
+```
+
+Stops before the next call once that much has been spent. `--plan-first` costs
+one extra call on the first iteration.
+
+### A run was interrupted or went wrong
+
+```bash
+python main.py --repo . --rollback
+```
+
+Undoes the last run by popping the git stash it took before applying changes.
+
+### `python -m pytest` from the repository root fails to collect
+
+Running the suite from the root fails for reasons unrelated to your change:
+three files share the basename `test_utils.py`, there is no `__init__.py`, and
+there is no pytest configuration. Run targeted paths instead:
+
+```bash
+python -m pytest tests/test_sandbox_env.py -q
+```
+
+### Non-ASCII output looks mangled on Windows
+
+`Path.read_text()` and `open()` default to the locale encoding, which is cp1252
+on a default Windows install. Pass `encoding="utf-8"` explicitly when reading
+project files.
+
+### PowerShell mangles a multi-line `python -c`
+
+The `>>` continuation prompt breaks the string. Write a file instead:
+
+```powershell
+@'
+print("hello")
+'@ | Set-Content -Encoding utf8 tmp.py
+python tmp.py
 ```
 
 ---
