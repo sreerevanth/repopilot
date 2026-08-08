@@ -1,0 +1,20 @@
+## Task
+{task}
+
+## Repository Context
+{context}
+
+## Instructions
+Do NOT write any code yet. Work out how you would approach this task.
+
+Return ONLY a JSON object with this schema:
+
+{{
+  "plan": ["<step>", "<step>", ...],
+  "files_to_change": ["<relative path>", ...],
+  "risks": ["<what could go wrong or is unclear>", ...],
+  "confidence": <0.0-1.0 float>
+}}
+
+Keep the plan to at most 6 steps. If the task is unclear or the context is
+insufficient, say so in "risks" and set confidence below 0.4.
