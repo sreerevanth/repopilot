@@ -89,6 +89,8 @@ Examples:
     # API key
     parser.add_argument("--api-key", default=None,
                         help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
+    parser.add_argument("--model", default=None,
+                        help="LLM model name (default: claude-sonnet-4-20250514, or AGENT_MODEL env var)")
 
     return parser.parse_args()
 
@@ -139,6 +141,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        model=args.model,
     )
 
     try:

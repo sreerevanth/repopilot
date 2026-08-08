@@ -17,7 +17,7 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 8192
 
 # ─────────────────────────────────────────────
@@ -123,7 +123,7 @@ class LLMResponse:
 # ─────────────────────────────────────────────
 
 class LLMClient:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         if not _ANTHROPIC_AVAILABLE:
             raise RuntimeError(
                 "anthropic package not installed. Run: pip install anthropic"
@@ -132,13 +132,14 @@ class LLMClient:
         if not key:
             raise ValueError("ANTHROPIC_API_KEY not set")
         self.client = anthropic.Anthropic(api_key=key)
+        self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODEL
 
     def _call(self, prompt: str, retries: int = 3) -> str:
         """Raw API call with retry on transient errors."""
         for attempt in range(retries):
             try:
                 response = self.client.messages.create(
-                    model=MODEL,
+                    model=self.model,
                     max_tokens=MAX_TOKENS,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
