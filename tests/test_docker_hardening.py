@@ -24,7 +24,7 @@ from modules.sandbox import DockerSandbox, _docker_user_flags  # noqa: E402
 @pytest.fixture
 def cmd(tmp_path):
     sandbox = DockerSandbox(str(tmp_path))
-    return sandbox._build_docker_command(["python", "-m", "pytest"])
+    return sandbox._build_docker_command(["python", "-m", "pytest"], "test-container")
 
 
 def _flag_value(argv, flag):
@@ -50,7 +50,7 @@ def test_pids_are_limited(cmd):
 
 
 def test_pids_limit_is_configurable(tmp_path):
-    argv = DockerSandbox(str(tmp_path), pids_limit=1024)._build_docker_command(["x"])
+    argv = DockerSandbox(str(tmp_path), pids_limit=1024)._build_docker_command(["x"], "test-container")
     assert "--pids-limit=1024" in argv
     assert "--pids-limit=256" not in argv
 
@@ -78,7 +78,7 @@ def test_command_still_builds_without_getuid(monkeypatch, tmp_path):
     monkeypatch.delattr(os, "getgid", raising=False)
 
     sandbox = DockerSandbox(str(tmp_path))
-    argv = sandbox._build_docker_command(["python", "-m", "pytest"])
+    argv = sandbox._build_docker_command(["python", "-m", "pytest"], "test-container")
     assert argv[0] == "docker"
     assert "--user" not in argv
     # Everything that is not UID-dependent must still be applied.
@@ -121,7 +121,7 @@ def test_read_only_is_off_by_default(cmd):
 
 
 def test_read_only_can_be_enabled(tmp_path):
-    argv = DockerSandbox(str(tmp_path), read_only=True)._build_docker_command(["x"])
+    argv = DockerSandbox(str(tmp_path), read_only=True)._build_docker_command(["x"], "test-container")
     assert "--read-only" in argv
 
 
@@ -144,7 +144,7 @@ def test_workspace_stays_writable(cmd, tmp_path):
 def test_inner_command_is_not_string_interpolated(tmp_path):
     """shlex.join, so a path with spaces or quotes cannot break out of sh -c."""
     argv = DockerSandbox(str(tmp_path))._build_docker_command(
-        ["pytest", "-k", "weird name'; rm -rf /"]
+        ["pytest", "-k", "weird name'; rm -rf /"], "test-container"
     )
     assert argv[-2] == "-c"
     assert "'weird name'\"'\"'; rm -rf /'" in argv[-1]
@@ -157,5 +157,5 @@ def test_image_precedes_the_inner_command(cmd):
 
 def test_custom_image_is_honoured(tmp_path):
     sandbox = DockerSandbox(str(tmp_path), image="node:20-slim")
-    argv = sandbox._build_docker_command(["x"])
+    argv = sandbox._build_docker_command(["x"], "test-container")
     assert "node:20-slim" in argv
