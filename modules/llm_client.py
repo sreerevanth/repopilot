@@ -1,7 +1,13 @@
 """
 Module 3: LLM Interaction Layer
 Clean prompt engineering, structured I/O, token budget handling,
-iterative refinement support. Uses Anthropic Claude API.
+iterative refinement support.
+
+Supports multiple LLM providers:
+  - Anthropic Claude (default)
+  - OpenAI (GPT-4, etc.)
+  - Google Gemini
+  - Ollama (local, OpenAI-compatible API)
 """
 
 import json
@@ -11,13 +17,40 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# ─────────────────────────────────────────────
+# Provider availability checks
+# ─────────────────────────────────────────────
+
 try:
     import anthropic
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+try:
+    import openai
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    _OPENAI_AVAILABLE = False
+
+try:
+    import google.generativeai as genai
+    _GEMINI_AVAILABLE = True
+except ImportError:
+    _GEMINI_AVAILABLE = False
+
+
+# ─────────────────────────────────────────────
+# Defaults
+# ─────────────────────────────────────────────
+
+DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-20250514",
+    "openai": "gpt-4o",
+    "gemini": "gemini-2.0-flash",
+    "ollama": "llama3",
+}
+
 MAX_TOKENS = 8192
 
 # ─────────────────────────────────────────────
@@ -119,38 +152,19 @@ class LLMResponse:
 
 
 # ─────────────────────────────────────────────
-# Client
+# Base Client
 # ─────────────────────────────────────────────
 
-class LLMClient:
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            )
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
-        self.client = anthropic.Anthropic(api_key=key)
-        self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODEL
+class BaseLLMClient:
+    """Abstract base for LLM clients across providers."""
+
+    def __init__(self, model: Optional[str] = None, provider: str = "anthropic"):
+        self.provider = provider
+        self.model = model or os.environ.get("AGENT_MODEL") or DEFAULT_MODELS.get(provider, "")
 
     def _call(self, prompt: str, retries: int = 3) -> str:
-        """Raw API call with retry on transient errors."""
-        for attempt in range(retries):
-            try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.content[0].text
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise
-                wait = 2 ** attempt
-                time.sleep(wait)
-        raise RuntimeError("LLM call failed after retries")
+        """Raw API call with retry. Subclasses must implement."""
+        raise NotImplementedError
 
     def _parse_response(self, raw: str) -> LLMResponse:
         """Extract and parse JSON from LLM output."""
@@ -225,3 +239,215 @@ class LLMClient:
         )
         raw = self._call(prompt)
         return self._parse_response(raw)
+
+
+# ─────────────────────────────────────────────
+# Anthropic Client
+# ─────────────────────────────────────────────
+
+class AnthropicLLMClient(BaseLLMClient):
+    """LLM client using Anthropic Claude API."""
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        super().__init__(model=model, provider="anthropic")
+        if not _ANTHROPIC_AVAILABLE:
+            raise RuntimeError(
+                "anthropic package not installed. Run: pip install anthropic"
+            )
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        self.client = anthropic.Anthropic(api_key=key)
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        for attempt in range(retries):
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.content[0].text
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM call failed after retries")
+
+
+# ─────────────────────────────────────────────
+# OpenAI Client
+# ─────────────────────────────────────────────
+
+class OpenAILLMClient(BaseLLMClient):
+    """LLM client using OpenAI-compatible API (GPT-4, etc.)."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        super().__init__(model=model, provider="openai")
+        if not _OPENAI_AVAILABLE:
+            raise RuntimeError(
+                "openai package not installed. Run: pip install openai"
+            )
+        key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        kwargs = {"api_key": key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = openai.OpenAI(**kwargs)
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        for attempt in range(retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM call failed after retries")
+
+
+# ─────────────────────────────────────────────
+# Gemini Client
+# ─────────────────────────────────────────────
+
+class GeminiLLMClient(BaseLLMClient):
+    """LLM client using Google Gemini API."""
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        super().__init__(model=model, provider="gemini")
+        if not _GEMINI_AVAILABLE:
+            raise RuntimeError(
+                "google-generativeai package not installed. Run: pip install google-generativeai"
+            )
+        key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not key:
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+        genai.configure(api_key=key)
+        self.genai_model = genai.GenerativeModel(
+            model_name=self.model,
+            system_instruction=SYSTEM_PROMPT,
+        )
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        for attempt in range(retries):
+            try:
+                response = self.genai_model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=MAX_TOKENS,
+                    ),
+                )
+                return response.text
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM call failed after retries")
+
+
+# ─────────────────────────────────────────────
+# Ollama Client (OpenAI-compatible)
+# ─────────────────────────────────────────────
+
+class OllamaLLMClient(BaseLLMClient):
+    """LLM client for Ollama using its OpenAI-compatible API."""
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        super().__init__(model=model, provider="ollama")
+        if not _OPENAI_AVAILABLE:
+            raise RuntimeError(
+                "openai package not installed (used for Ollama compatibility). "
+                "Run: pip install openai"
+            )
+        self.client = openai.OpenAI(
+            api_key="ollama",  # Ollama doesn't require a real key
+            base_url=base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1",
+        )
+
+    def _call(self, prompt: str, retries: int = 3) -> str:
+        for attempt in range(retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = 2 ** attempt
+                time.sleep(wait)
+        raise RuntimeError("LLM call failed after retries")
+
+
+# ─────────────────────────────────────────────
+# Factory
+# ─────────────────────────────────────────────
+
+def create_llm_client(
+    provider: str = "anthropic",
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> BaseLLMClient:
+    """
+    Create an LLM client for the specified provider.
+
+    Args:
+        provider: One of 'anthropic', 'openai', 'gemini', 'ollama'.
+        api_key: API key (or read from env vars).
+        model: Model name (or use provider defaults).
+        base_url: Custom API base URL (for Ollama or self-hosted).
+
+    Returns:
+        A configured BaseLLMClient subclass instance.
+    """
+    provider = provider.lower().strip()
+
+    if provider == "anthropic":
+        return AnthropicLLMClient(api_key=api_key, model=model)
+    elif provider == "openai":
+        return OpenAILLMClient(api_key=api_key, model=model, base_url=base_url)
+    elif provider == "gemini":
+        return GeminiLLMClient(api_key=api_key, model=model)
+    elif provider == "ollama":
+        return OllamaLLMClient(model=model, base_url=base_url)
+    else:
+        raise ValueError(
+            f"Unknown provider: '{provider}'. "
+            f"Supported: anthropic, openai, gemini, ollama"
+        )
+
+
+# ─────────────────────────────────────────────
+# Backward-compatible alias
+# ─────────────────────────────────────────────
+
+class LLMClient(AnthropicLLMClient):
+    """Backward-compatible alias for AnthropicLLMClient."""
+    pass
