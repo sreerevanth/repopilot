@@ -447,8 +447,8 @@ class AutonomousAgent:
 
                 if self.config.dry_run:
                     manifest_path = save_manifest(changes_list, self.config.log_dir, self.run_id)
-                    print(f"\n[DRY RUN] No files were modified.")
-                    print(f"[DRY RUN] Manifest saved to: {manifest_path}")
+                    self.logger.info("[DRY RUN] No files were modified.")
+                    self.logger.info(f"[DRY RUN] Manifest saved to: {manifest_path}")
                     return AgentRunResult(
                         outcome="dry_run",
                         run_id=self.run_id,
