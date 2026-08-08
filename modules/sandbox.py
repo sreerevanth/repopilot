@@ -337,7 +337,11 @@ def _discover_test_files(root: str) -> list[str]:
         ]
         for name in sorted(filenames):
             if any(fnmatch.fnmatch(name, g) for g in TEST_FILE_GLOBS):
-                found.append(os.path.relpath(os.path.join(dirpath, name), root))
+                # Forward slashes, matching repo_ingestion and secret_scanner.
+                # DockerSandbox mounts the repo into a Linux container, so a
+                # Windows-discovered "tests\\test_x.py" would not resolve there.
+                relative = os.path.relpath(os.path.join(dirpath, name), root)
+                found.append(relative.replace(os.sep, "/"))
     return sorted(found)[:MAX_FALLBACK_FILES]
 
 

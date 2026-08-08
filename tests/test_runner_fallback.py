@@ -15,7 +15,6 @@ tests pin that the result says so.
 """
 
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -41,7 +40,9 @@ def no_pytest(monkeypatch):
 
 @pytest.fixture
 def project(tmp_path):
-    (tmp_path / "test_ok.py").write_text("def test_a():\n    assert 1 == 1\n\nassert 2 == 2\n")
+    (tmp_path / "test_ok.py").write_text(
+        "def test_a():\n    assert 1 == 1\n\nassert 2 == 2\n"
+    )
     (tmp_path / "helper.py").write_text("x = 1\n")
     return SubprocessSandbox(str(tmp_path), timeout_seconds=60)
 
@@ -117,6 +118,21 @@ def test_nested_test_files_are_found(tmp_path):
     assert _discover_test_files(str(tmp_path)) == ["tests/test_deep.py"]
 
 
+def test_paths_use_forward_slashes(tmp_path):
+    """
+    DockerSandbox mounts the repo into a Linux container, so a path discovered
+    on Windows as "tests\\test_x.py" would not resolve inside it. Matches the
+    convention already used by repo_ingestion and secret_scanner.
+    """
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "test_nested.py").write_text("")
+
+    found = _discover_test_files(str(tmp_path))
+
+    assert found == ["a/b/test_nested.py"]
+    assert all("\\" not in path for path in found)
+
+
 def test_the_file_count_is_capped(tmp_path):
     """One `python` invocation per file; an unbounded repo would hang the run."""
     for i in range(60):
@@ -168,7 +184,8 @@ def test_the_result_states_the_limitation(no_pytest, project):
 def test_each_file_is_labelled_in_the_output(no_pytest, tmp_path):
     (tmp_path / "test_one.py").write_text("")
     (tmp_path / "test_two.py").write_text("")
-    stdout = SubprocessSandbox(str(tmp_path), timeout_seconds=60).run_tests("pytest").stdout
+    sandbox = SubprocessSandbox(str(tmp_path), timeout_seconds=60)
+    stdout = sandbox.run_tests("pytest").stdout
 
     assert "--- test_one.py" in stdout
     assert "--- test_two.py" in stdout
