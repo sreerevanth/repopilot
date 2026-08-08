@@ -1,0 +1,86 @@
+name: Import Guard
+
+# Catches the failure mode that has broken `main` twice: a merge drops a
+# definition (an import, a base class, a constant) while keeping every
+# reference to it. Nothing in the existing checks fails on that, because the
+# test suite cannot even be collected once a module stops importing.
+#
+# Deliberately does not run the test suite. This is the check that must stay
+# green when everything else is red, so it has no dependency on test state.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  imports:
+    name: Package imports and CLI starts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Every module imports
+        # Walks modules/ rather than naming them, so a new module is covered
+        # the day it lands instead of whenever someone remembers to add it.
+        run: |
+          python - <<'PY'
+          import importlib, pathlib, sys
+
+          failures = []
+          for path in sorted(pathlib.Path("modules").glob("*.py")):
+              if path.stem == "__init__":
+                  continue
+              name = f"modules.{path.stem}"
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failures.append((name, f"{type(exc).__name__}: {exc}"))
+
+          for name, err in failures:
+              print(f"FAIL {name}: {err}")
+
+          if failures:
+              print(f"\n{len(failures)} module(s) could not be imported.")
+              print("This usually means a merge dropped a definition while")
+              print("keeping the references to it.")
+              sys.exit(1)
+
+          print("all modules import")
+          PY
+
+      - name: CLI starts
+        # --help exercises argparse, which catches duplicate flags and repeated
+        # keyword arguments that a plain import does not reach.
+        run: python main.py --help > /dev/null
+
+      - name: No duplicate CLI flags
+        run: |
+          python - <<'PY'
+          import collections, re, sys
+
+          flags = re.findall(r'add_argument\(\s*"(--[a-z0-9-]+)"', open("main.py").read())
+          dupes = {f: c for f, c in collections.Counter(flags).items() if c > 1}
+
+          if dupes:
+              for flag, count in sorted(dupes.items()):
+                  print(f"FAIL {flag} registered {count} times")
+              sys.exit(1)
+
+          print(f"{len(flags)} CLI flags, no duplicates")
+          PY
