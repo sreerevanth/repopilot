@@ -39,6 +39,7 @@ from modules.sandbox import (
 from modules.git_integration import GitIntegration
 from modules.doc_lookup import perform_lookups, render_lookups
 from modules.run_state import check_resumable, clear_state, load_state, save_state
+from modules.project_rules import load_project_rules, render_project_rules
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
 from modules.token_tracker import TokenTracker
@@ -101,6 +102,7 @@ class AgentConfig:
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
+    project_rules_file: str = ".agentcontext"   # per-repo rules, "" to disable
 
     # Parallel Processing
     parallel: bool = False
@@ -452,6 +454,19 @@ class AutonomousAgent:
             )
             self.logger.log_context([f.path for f in context.files], context.total_chars)
             context_str = context.render()
+
+            # Prepended rather than folded into the file context: when the
+            # budget is tight, files get dropped or outlined, and the project's
+            # own rules should not be the thing that falls out.
+            if cfg.project_rules_file:
+                rules = load_project_rules(cfg.repo_root, cfg.project_rules_file)
+                if rules:
+                    if iteration == 1:
+                        self.logger.info(
+                            f"  Project rules: {cfg.project_rules_file} "
+                            f"({len(rules):,} chars)"
+                        )
+                    context_str = render_project_rules(rules) + "\n\n" + context_str
 
             if cfg.context_only:
                 # Before the LLM call, so this costs nothing. --dry-run already

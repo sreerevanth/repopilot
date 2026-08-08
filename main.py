@@ -111,6 +111,11 @@ Examples:
     parser.add_argument("--context-budget", type=int, default=None, metavar="CHARS",
                         help="Characters of repository context to send. Derived "
                              "from the model's context window when not set.")
+    parser.add_argument("--project-rules", dest="project_rules_file",
+                        default=".agentcontext", metavar="PATH",
+                        help="Per-repo rules file, read from the repo root and "
+                             "prepended to every prompt. Pass an empty string to "
+                             "disable.")
     parser.add_argument("--include", nargs="*", default=None,
                         help="Force-include specific file paths in context (relative to repo root)")
 
@@ -282,6 +287,7 @@ def main():
 
         # Context
         force_include_paths=args.include,
+        project_rules_file=args.project_rules_file,
         context_budget=args.context_budget,
 
         # LLM
