@@ -201,6 +201,43 @@ def _extract_keywords(task: str) -> list[str]:
     return [token for token in tokens if token not in stopwords and len(token) > 2]
 
 
+# Compiled once at import rather than on every file. Python caches compiled
+# patterns internally, but the cache is keyed on the pattern string and still
+# costs a lookup per call -- and scoring runs these three against every file in
+# the repository, on every iteration.
+IMPORT_PATTERNS = [
+    re.compile(r"^import\s+(\w+)", re.MULTILINE),
+    re.compile(r"^from\s+(\w+)", re.MULTILINE),
+    re.compile(r"""require\(['"]([^'"]+)['"]""", re.MULTILINE),
+]
+
+# Imports appear at the top of a file by convention in every language this
+# scores. Scanning the whole of a 300KB minified bundle for `^import` finds
+# nothing and costs the most of any single step -- and on minified output there
+# are no line starts at all, so re.MULTILINE scans the entire blob for anchors
+# that cannot exist.
+IMPORT_SCAN_CHARS = 8_000
+
+# Languages with no import syntax worth scanning for.
+NON_CODE_LANGUAGES = frozenset({
+    "json", "yaml", "toml", "xml", "markdown", "text", "css", "scss",
+    "ini", "config", "env", "sql", "unknown",
+})
+
+
+def _extract_imports(content: str, language: str) -> set[str]:
+    """Module names imported near the top of a file."""
+    if language in NON_CODE_LANGUAGES:
+        return set()
+
+    head = content[:IMPORT_SCAN_CHARS]
+    modules: set[str] = set()
+    for pattern in IMPORT_PATTERNS:
+        for match in pattern.finditer(head):
+            modules.add(match.group(1).lower().split(".")[0])
+    return modules
+
+
 def _score_file(record: FileRecord, keywords: list[str], task: str) -> ScoredFile:
     score = 0.0
     reasons = []
@@ -250,15 +287,7 @@ def _score_file(record: FileRecord, keywords: list[str], task: str) -> ScoredFil
     elif is_test:
         score -= 3
 
-    import_patterns = [
-        r"^import\s+(\w+)",
-        r"^from\s+(\w+)",
-        r"require\(['\"]([^'\"]+)['\"]",
-    ]
-    imported_modules: set[str] = set()
-    for pattern in import_patterns:
-        for match in re.finditer(pattern, record.content, re.MULTILINE):
-            imported_modules.add(match.group(1).lower().split(".")[0])
+    imported_modules = _extract_imports(record.content, record.language)
 
     import_hits = sum(1 for keyword in keywords if keyword in imported_modules)
     if import_hits:
