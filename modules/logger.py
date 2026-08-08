@@ -41,6 +41,15 @@ class IterationRecord:
     execution_success: bool
     parse_error: Optional[str]
 
+    # Per-phase wall time. Defaulted so every existing construction site keeps
+    # working -- there are several, and a required field would break them all.
+    duration_ingest: float = 0.0
+    duration_context: float = 0.0
+    duration_llm: float = 0.0
+    duration_apply: float = 0.0
+    duration_execution: float = 0.0
+    duration_total: float = 0.0
+
 
 @dataclass
 class RunRecord:
@@ -167,6 +176,15 @@ class AgentLogger:
         self._logger.info(f"  {status} Git {action}: {result.output[:100] or result.error[:100]}")
 
     def record_iteration(self, record: IterationRecord):
+        if record.duration_total:
+            # One line rather than six: the breakdown is in the JSONL for
+            # anyone measuring, and the terminal only needs the shape of it.
+            self.info(
+                f"  Timing: llm {record.duration_llm:.1f}s | "
+                f"tests {record.duration_execution:.1f}s | "
+                f"ingest {record.duration_ingest:.1f}s | "
+                f"total {record.duration_total:.1f}s"
+            )
         if self._run_record:
             self._run_record.iterations.append(record)
             self._run_record.total_iterations += 1
