@@ -93,7 +93,9 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    api_base_url: Optional[str] = None     # override the provider endpoint
     resume_from: Optional[str] = None      # run_id to continue
+    quiet: bool = False                    # suppress debug-level output
     verbose_payloads: bool = False         # dump raw LLM request/response
     model: Optional[str] = None
     context_budget: Optional[int] = None   # chars; derived from the model if unset
@@ -154,7 +156,9 @@ class AutonomousAgent:
         self.log_dir = os.path.abspath(os.path.join(cfg.repo_root, cfg.log_dir))
 
         # Instantiate modules
-        self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
+        # --quiet was registered but never read; the logger was pinned to
+        # verbose=True, so the flag had no effect at all.
+        self.logger = AgentLogger(self.log_dir, self.run_id, verbose=not cfg.quiet)
         # Built on first use rather than here. --context-only returns before any
         # request is made, so constructing a client eagerly made a flag whose
         # whole point is "no API call, no cost" fail without the provider SDK
@@ -206,6 +210,7 @@ class AutonomousAgent:
                 model=cfg.model,
                 provider=cfg.provider,
                 verbose=cfg.verbose_payloads,
+            api_base_url=cfg.api_base_url,
             )
         return self._llm
 
