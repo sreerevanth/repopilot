@@ -60,6 +60,12 @@ Examples:
     parser.add_argument("--max-iter", type=int, default=5,
                         help="Maximum number of agent iterations (default: 5)")
 
+    # Parallel Processing
+    parser.add_argument("--parallel", action="store_true",
+                        help="Enable parallel file processing (ingestion and modification)")
+    parser.add_argument("--workers", type=int, default=10,
+                        help="Number of worker threads for parallel processing (default: 10)")
+
     # Git
     parser.add_argument("--no-git", action="store_true",
                         help="Disable git operations entirely")
@@ -98,12 +104,12 @@ def main():
 
     repo_root = os.path.abspath(args.repo)
     if args.rollback:
-    modifier = CodeModificationEngine(
-        repo_root=repo_root,
-        backup_dir="backups"
-    )
-    success = modifier.git_stash_pop(repo_root)
-    sys.exit(0 if success else 1)
+        modifier = CodeModificationEngine(
+            repo_root=repo_root,
+            backup_dir="backups"
+        )
+        success = modifier.git_stash_pop(repo_root)
+        sys.exit(0 if success else 1)
     if not os.path.isdir(repo_root):
         print(f"ERROR: Repository path does not exist: {repo_root}", file=sys.stderr)
         sys.exit(1)
@@ -139,6 +145,10 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+
+        # Parallel
+        parallel=args.parallel,
+        workers=args.workers,
     )
 
     try:
