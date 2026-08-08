@@ -286,7 +286,9 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        api_base_url=args.api_base_url,
         verbose_payloads=args.verbose_payloads,
+        quiet=args.quiet,
         model=args.model,
         provider=args.provider,
     )

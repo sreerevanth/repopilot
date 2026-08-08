@@ -346,6 +346,15 @@ class BudgetExceededError(RuntimeError):
     """
 
 
+# Where each provider is reached when --api-base-url is not given. Ollama is
+# the one that matters in practice -- it is self-hosted, so the address is a
+# per-user setting rather than a constant.
+DEFAULT_BASE_URLS = {
+    "ollama": "http://localhost:11434",
+    "openai": "https://api.openai.com/v1",
+}
+
+
 class BaseLLMClient:
     """
     Shared behaviour for every provider client.
@@ -633,12 +642,16 @@ class GeminiClient(BaseLLMClient):
 
 
 class OllamaClient(BaseLLMClient):
-    def __init__(self, model: str = "llama3"):
+    def __init__(self, model: str = "llama3", api_base_url: Optional[str] = None):
         super().__init__(model)
+        # Self-hosted, so the address is a per-user setting. --api-base-url was
+        # registered but never read, leaving this hardcoded to localhost.
+        base = api_base_url or DEFAULT_BASE_URLS["ollama"]
+        self.api_base_url = base.rstrip("/")
 
     def _call(self, prompt: str) -> str:
         print("  [Streaming LLM Response (Ollama)]: ", end="", flush=True)
-        url = "http://localhost:11434/api/chat"
+        url = f"{self.api_base_url}/api/chat"
         headers = {
             "Content-Type": "application/json"
         }
@@ -667,7 +680,7 @@ class OllamaClient(BaseLLMClient):
                 print("\n")
                 return text
         except Exception as e:
-            print(f"Error calling Ollama API (is Ollama server running on localhost:11434?): {e}")
+            print(f"Error calling Ollama API (is the Ollama server running at {self.api_base_url}?): {e}")
             raise
 
 
@@ -675,7 +688,8 @@ class LLMClient(BaseLLMClient):
     """Facade class maintaining backward compatibility while wrapping dynamic clients."""
     
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL,
-                 provider: str = "anthropic", verbose: bool = False):
+                 provider: str = "anthropic", verbose: bool = False,
+                 api_base_url: Optional[str] = None):
         super().__init__(model, verbose)
         self.provider = provider.lower()
         if self.provider == "openai":
@@ -683,7 +697,7 @@ class LLMClient(BaseLLMClient):
         elif self.provider == "gemini":
             self.underlying_client = GeminiClient(api_key, model)
         elif self.provider == "ollama":
-            self.underlying_client = OllamaClient(model)
+            self.underlying_client = OllamaClient(model, api_base_url)
         else:
             self.underlying_client = AnthropicClient(api_key, model)
 
