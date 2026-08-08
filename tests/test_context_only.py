@@ -90,3 +90,61 @@ def test_no_files_are_touched():
 
     assert "apply_changes" not in block
     assert "_commit_changes" not in block
+
+
+# ── it must not need a provider ───────────────────────────────────────────
+
+
+def test_the_llm_client_is_built_lazily():
+    """
+    Constructing the client in __init__ made --context-only require the provider
+    SDK and a valid API key — for a flag whose entire point is that no request
+    is made. The client is now built on first access.
+    """
+    text = source()
+
+    assert "self._llm: Optional[LLMClient] = None" in text
+    assert "def llm(self) -> LLMClient:" in text
+
+
+def test_context_only_runs_without_an_api_key(tmp_path, monkeypatch):
+    from modules.agent_loop import AgentConfig, AutonomousAgent
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (tmp_path / "mod.py").write_text("def parse(x):\n    return x\n")
+
+    result = AutonomousAgent(
+        AgentConfig(
+            repo_root=str(tmp_path), task="fix parse",
+            context_only=True, git_enabled=False,
+        )
+    ).run()
+
+    assert result.outcome == "context_only"
+
+
+def test_context_only_runs_without_the_provider_sdk(tmp_path, monkeypatch):
+    """A reader inspecting context selection should not need to install a SDK."""
+    import builtins
+
+    from modules.agent_loop import AgentConfig, AutonomousAgent
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "anthropic":
+            raise ImportError("anthropic not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (tmp_path / "mod.py").write_text("def parse(x):\n    return x\n")
+
+    result = AutonomousAgent(
+        AgentConfig(
+            repo_root=str(tmp_path), task="fix parse",
+            context_only=True, git_enabled=False,
+        )
+    ).run()
+
+    assert result.outcome == "context_only"

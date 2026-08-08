@@ -137,12 +137,11 @@ class AutonomousAgent:
 
         # Instantiate modules
         self.logger = AgentLogger(self.log_dir, self.run_id, verbose=True)
-        self.llm = LLMClient(
-            api_key=cfg.anthropic_api_key,
-            model=cfg.model,
-            provider=cfg.provider,
-            verbose=cfg.verbose_payloads,
-        )
+        # Built on first use rather than here. --context-only returns before any
+        # request is made, so constructing a client eagerly made a flag whose
+        # whole point is "no API call, no cost" fail without the provider SDK
+        # installed and a valid key present.
+        self._llm: Optional[LLMClient] = None
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
         self.token_tracker = TokenTracker()
@@ -178,6 +177,19 @@ class AutonomousAgent:
             timed_out=False,
             duration_seconds=0.0,
         )
+
+    @property
+    def llm(self) -> LLMClient:
+        """The provider client, constructed on first access."""
+        if self._llm is None:
+            cfg = self.config
+            self._llm = LLMClient(
+                api_key=cfg.anthropic_api_key,
+                model=cfg.model,
+                provider=cfg.provider,
+                verbose=cfg.verbose_payloads,
+            )
+        return self._llm
 
     def _run_execution(self) -> ExecutionResult:
         """Run tests or the specified file in the sandbox."""
