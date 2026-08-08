@@ -14,6 +14,7 @@ Flow per iteration:
 """
 
 import os
+import time
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -119,6 +120,22 @@ class AgentRunResult:
 # ─────────────────────────────────────────────
 # The Agent
 # ─────────────────────────────────────────────
+
+def _stamp_timings(record, iter_started, ingest, context, llm, apply_, exec_phase):
+    """
+    Attach per-phase wall time to an iteration record.
+
+    A helper rather than inline assignments because record_iteration is called
+    from seven places -- early returns for parse errors, validation failures and
+    budget stops all write a record, and each would otherwise need six lines.
+    """
+    record.duration_ingest = round(ingest, 3)
+    record.duration_context = round(context, 3)
+    record.duration_llm = round(llm, 3)
+    record.duration_apply = round(apply_, 3)
+    record.duration_execution = round(time.time() - exec_phase, 3)
+    record.duration_total = round(time.time() - iter_started, 3)
+
 
 class AutonomousAgent:
     def __init__(self, config: AgentConfig):
@@ -400,6 +417,12 @@ class AutonomousAgent:
             iterations_used = iteration
             self.logger.start_iteration(iteration)
 
+            iter_started = time.time()
+            phase = time.time()
+            # Initialised up front because several early returns -- parse
+            # errors, validation failures, budget stops -- write a record
+            # before the later phases have run.
+            duration_ingest = duration_context = duration_llm = duration_apply = 0.0
             # ── Step 1: Ingest repo (re-read to pick up changes from previous iter) ──
             try:
                 if cfg.parallel:
@@ -415,6 +438,8 @@ class AutonomousAgent:
                     pr_url=None, iterations_used=iteration - 1, final_message=str(e)
                 )
 
+            duration_ingest = time.time() - phase
+            phase = time.time()
             # ── Step 2: Build context ──
             context = build_context(
                 repo, cfg.task,
@@ -452,6 +477,8 @@ class AutonomousAgent:
                     ),
                 )
 
+            duration_context = time.time() - phase
+            phase = time.time()
             # ── Step 3: Call LLM ──
             try:
                 if iteration == 1 or not last_exec:
@@ -538,6 +565,10 @@ class AutonomousAgent:
                         timed_out=False,
                         duration_seconds=0.0,
                     )
+                    _stamp_timings(
+                        iter_record, iter_started, duration_ingest, duration_context,
+                        duration_llm, duration_apply, phase,
+                    )
                     self.logger.record_iteration(iter_record)
                     continue
 
@@ -550,9 +581,15 @@ class AutonomousAgent:
                 if iteration == cfg.max_iterations:
                     outcome = "failed"
                     break
+                _stamp_timings(
+                    iter_record, iter_started, duration_ingest, duration_context,
+                    duration_llm, duration_apply, phase,
+                )
                 self.logger.record_iteration(iter_record)
                 continue
 
+            duration_llm = time.time() - phase
+            phase = time.time()
             # ── Step 4: Validate + Apply changes ──
             if llm_resp.changes:
                 validation_errors = self.modifier.verify_changes(llm_resp.changes)
@@ -617,6 +654,10 @@ class AutonomousAgent:
                 if apply_results and all(not r.success for r in apply_results):
                     self.logger.error("  All file modifications failed. Check paths and permissions.")
                     outcome = "error"
+                    _stamp_timings(
+                        iter_record, iter_started, duration_ingest, duration_context,
+                        duration_llm, duration_apply, phase,
+                    )
                     self.logger.record_iteration(iter_record)
                     break
             else:
@@ -634,15 +675,25 @@ class AutonomousAgent:
                         "  Commit declined. Changes are left in the working tree."
                     )
                     outcome = "aborted"
+                    _stamp_timings(
+                        iter_record, iter_started, duration_ingest, duration_context,
+                        duration_llm, duration_apply, phase,
+                    )
                     self.logger.record_iteration(iter_record)
                     break
 
                 self._commit_changes(iteration, changed_paths)
                 outcome = "success"
                 iter_record.execution_success = True
+                _stamp_timings(
+                    iter_record, iter_started, duration_ingest, duration_context,
+                    duration_llm, duration_apply, phase,
+                )
                 self.logger.record_iteration(iter_record)
                 break
 
+            duration_apply = time.time() - phase
+            phase = time.time()
             # ── Step 5: Execute ──
             # Lint first when configured. A syntax error surfaces in under a
             # second with a precise location, instead of arriving as a pytest
@@ -661,6 +712,10 @@ class AutonomousAgent:
                     iter_record.execution_stdout = lint_result.stdout[:2000]
                     iter_record.execution_stderr = lint_result.stderr[:2000]
                     iter_record.execution_success = False
+                    _stamp_timings(
+                        iter_record, iter_started, duration_ingest, duration_context,
+                        duration_llm, duration_apply, phase,
+                    )
                     self.logger.record_iteration(iter_record)
                     continue
 
@@ -678,6 +733,10 @@ class AutonomousAgent:
             iter_record.execution_timed_out = exec_result.timed_out
             iter_record.execution_success = exec_result.success
 
+            _stamp_timings(
+                iter_record, iter_started, duration_ingest, duration_context,
+                duration_llm, duration_apply, phase,
+            )
             self.logger.record_iteration(iter_record)
 
             if cfg.coverage and exec_result.success:
