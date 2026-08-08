@@ -124,6 +124,9 @@ Examples:
                         help="Path to configuration JSON file (default: .repopilot.json in repo root)")
 
     # Non-interactive / CI
+    parser.add_argument("--max-cost", type=float, default=None, metavar="USD",
+                        help="Stop before the next LLM call once this much has been "
+                             "spent (e.g. --max-cost 1.00). Off by default.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
     parser.add_argument("--interactive", "-i", action="store_true",
