@@ -90,6 +90,12 @@ Examples:
     parser.add_argument("--max-iter", type=int, default=5,
                         help="Maximum number of agent iterations (default: 5)")
 
+    # Parallel Processing
+    parser.add_argument("--parallel", action="store_true",
+                        help="Enable parallel file processing (ingestion and modification)")
+    parser.add_argument("--workers", type=int, default=10,
+                        help="Number of worker threads for parallel processing (default: 10)")
+
     # Git
     parser.add_argument("--no-git", action="store_true",
                         help="Disable git operations entirely")
@@ -280,6 +286,9 @@ def main():
         # Dirs
         backup_dir=args.backup_dir,
         log_dir=args.log_dir,
+
+        # CLI behavior
+        yes=args.yes or os.environ.get("CI") == "true",
 
         # Context
         force_include_paths=args.include,

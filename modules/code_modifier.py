@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.llm_client import FileChange
 
@@ -334,11 +335,23 @@ class CodeModificationEngine:
             )
 
     def apply_changes(self, changes: list[FileChange]) -> list[ApplyResult]:
-        """Apply a list of file changes. Returns per-file results."""
+        """Apply a list of file changes sequentially. Returns per-file results."""
         results = []
         for change in changes:
             result = self._apply_single(change)
             results.append(result)
+        return results
+
+    def apply_changes_parallel(self, changes: list[FileChange], max_workers: int = 10) -> list[ApplyResult]:
+        """Apply a list of file changes in parallel using ThreadPoolExecutor."""
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # We must map futures to changes to preserve order if needed, 
+            # though as_completed returns them out of order.
+            # We'll just collect them and return.
+            futures = [executor.submit(self._apply_single, change) for change in changes]
+            for future in as_completed(futures):
+                results.append(future.result())
         return results
 
     def rollback(self, results: list[ApplyResult]) -> list[str]:

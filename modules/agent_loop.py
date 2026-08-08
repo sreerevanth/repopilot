@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from modules.repo_ingestion import ingest_repository, Repository
+from modules.repo_ingestion import ingest_repository, ingest_repository_parallel, Repository
 from modules.context_builder import build_context
 from modules.llm_client import (
     BudgetExceededError,
@@ -39,6 +39,7 @@ from modules.git_integration import GitIntegration
 from modules.doc_lookup import perform_lookups, render_lookups
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
+from modules.token_tracker import TokenTracker
 
 
 # ─────────────────────────────────────────────
@@ -76,7 +77,10 @@ class AgentConfig:
     git_enabled: bool = True
     git_branch_prefix: str = "agent"
     git_base_branch: str = "main"
-    git_commit_author: str = "Agent Bot <agent@autonomous.dev>"
+    git_commit_author: str = "RepoPilot Agent <agent@repopilot.local>"
+
+    # CLI behavior
+    yes: bool = False
     git_push: bool = False                  # push to remote?
     git_create_pr: bool = False             # create GitHub PR?
 
@@ -92,6 +96,9 @@ class AgentConfig:
     # Context
     force_include_paths: Optional[list] = None  # always include these files
 
+    # Parallel Processing
+    parallel: bool = False
+    workers: int = 10
 
 @dataclass
 class AgentRunResult:
@@ -129,6 +136,7 @@ class AutonomousAgent:
         self.llm = LLMClient(api_key=cfg.anthropic_api_key, model=cfg.model, provider=cfg.provider)
         self.modifier = CodeModificationEngine(cfg.repo_root, self.backup_dir)
         self.sandbox = SubprocessSandbox(cfg.repo_root, timeout_seconds=cfg.timeout_seconds)
+        self.token_tracker = TokenTracker()
 
         self.git: Optional[GitIntegration] = None
         if cfg.git_enabled:
@@ -372,7 +380,10 @@ class AutonomousAgent:
 
             # ── Step 1: Ingest repo (re-read to pick up changes from previous iter) ──
             try:
-                repo: Repository = ingest_repository(cfg.repo_root)
+                if cfg.parallel:
+                    repo: Repository = ingest_repository_parallel(cfg.repo_root, max_workers=cfg.workers)
+                else:
+                    repo: Repository = ingest_repository(cfg.repo_root)
             except Exception as e:
                 self.logger.error(f"Repo ingestion failed: {e}")
                 outcome = "error"
@@ -561,7 +572,10 @@ class AutonomousAgent:
                     )
 
                 self.modifier.git_stash_before_apply(self.config.repo_root)
-                apply_results = self.modifier.apply_changes(valid_changes)
+                if cfg.parallel and len(valid_changes) > 1:
+                    apply_results = self.modifier.apply_changes_parallel(valid_changes, max_workers=cfg.workers)
+                else:
+                    apply_results = self.modifier.apply_changes(valid_changes)
                 self.logger.log_apply_results(apply_results)
                 last_changes = valid_changes
                 last_apply_results = apply_results
