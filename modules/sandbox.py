@@ -9,12 +9,14 @@ Runs code in isolation using subprocess with:
 """
 
 import atexit
+import fnmatch
 import logging
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import time
 import sys
 import uuid
 from dataclasses import dataclass
@@ -294,15 +296,69 @@ def _build_safe_env(extra_env: Optional[dict] = None) -> dict:
     return env
 
 
+# Runners invoked as `python -m <module>`. `shutil.which` checks the executable,
+# which for these is the interpreter itself and therefore always present -- so
+# the "runner not found" guard never fires for them. Their availability has to
+# be probed by importing the module instead.
+MODULE_RUNNERS = {"pytest": "pytest"}
+
+# What each runner falls back to when it is unavailable. Only defined where the
+# fallback can actually run the same suite: `python -m pytest` and plain
+# `python <file>` both execute test files, so a repo whose tests are runnable as
+# scripts still gets a real signal. There is no equivalent for cargo or go.
+RUNNER_FALLBACKS = {"pytest": "python"}
+
+
+def _module_is_available(module: str) -> bool:
+    """True if `python -m <module>` would find the module."""
+    probe = subprocess.run(
+        [sys.executable, "-c", f"import {module}"],
+        capture_output=True,
+        timeout=30,
+    )
+    return probe.returncode == 0
+
+
+# Conventional test-file names. Deliberately narrow: running arbitrary files
+# with `python <file>` executes whatever is at module scope, so this only picks
+# up files a developer would recognise as tests.
+TEST_FILE_GLOBS = ("test_*.py", "*_test.py")
+MAX_FALLBACK_FILES = 25
+
+
+def _discover_test_files(root: str) -> list[str]:
+    """Test files under root, as paths relative to it."""
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".")
+            and d not in ("node_modules", "__pycache__", "venv")
+        ]
+        for name in sorted(filenames):
+            if any(fnmatch.fnmatch(name, g) for g in TEST_FILE_GLOBS):
+                found.append(os.path.relpath(os.path.join(dirpath, name), root))
+    return sorted(found)[:MAX_FALLBACK_FILES]
+
+
 def _resolve_runner(runner_name: str) -> Optional[list[str]]:
     """Resolve a runner name to an executable command list."""
     if runner_name not in ALLOWED_RUNNERS:
         return None
     candidates = ALLOWED_RUNNERS[runner_name]
     executable = candidates[0]
-    if shutil.which(executable):
-        return candidates
-    return None
+    if not shutil.which(executable):
+        return None
+
+    module = MODULE_RUNNERS.get(runner_name)
+    if module and not _module_is_available(module):
+        # `python -m pytest` with pytest absent exits 1 with "No module named
+        # pytest", which is indistinguishable from a failing suite once wrapped
+        # in an ExecutionResult -- the agent reads it as a test failure and
+        # starts rewriting code that was never broken.
+        return None
+
+    return candidates
 
 
 def _docker_is_usable(probe_timeout: int = 15) -> bool:
@@ -499,16 +555,82 @@ class SubprocessSandbox:
     def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
         """Run the project's test suite using a named runner."""
         cmd = _resolve_runner(runner)
+
         if cmd is None:
+            fallback = RUNNER_FALLBACKS.get(runner)
+            fallback_cmd = _resolve_runner(fallback) if fallback else None
+
+            if fallback_cmd is not None:
+                files = _discover_test_files(self.working_dir)
+                if files:
+                    _LOG.warning(
+                        "%s is unavailable; running %d test file(s) with %s "
+                        "instead. This is a weaker signal than a suite run.",
+                        runner, len(files), fallback,
+                    )
+                    return self._run_files_individually(fallback_cmd, files, extra_args)
+
+            detail = f"Runner '{runner}' not found or not allowed"
+            if fallback:
+                detail += (
+                    f". Falling back to '{fallback}' was not possible either "
+                    f"(no test files found, or {fallback} is unavailable)."
+                )
             return ExecutionResult(
                 command=runner,
                 exit_code=-3,
                 stdout="",
-                stderr=f"Runner '{runner}' not found or not allowed",
+                stderr=detail,
                 timed_out=False,
                 duration_seconds=0.0,
             )
+
         return self.run(cmd + (extra_args or []))
+
+    def _run_files_individually(
+        self,
+        base_cmd: list[str],
+        files: list[str],
+        extra_args: Optional[list[str]] = None,
+    ) -> ExecutionResult:
+        """
+        Run each test file as a script and combine the results.
+
+        This is weaker than a real suite run and the returned result says so:
+        `python <file>` executes module scope, so a file whose assertions live
+        inside pytest-collected functions will exit 0 without running anything.
+        A pass here means "nothing raised", not "the tests passed".
+        """
+        started = time.time()
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        worst_exit = 0
+        timed_out = False
+
+        for relative in files:
+            result = self.run(base_cmd + [relative] + (extra_args or []))
+            header = f"--- {relative} (exit {result.exit_code}) ---"
+            stdout_parts.append(f"{header}\n{result.stdout}".rstrip())
+            if result.stderr.strip():
+                stderr_parts.append(f"{header}\n{result.stderr}".rstrip())
+            if result.timed_out:
+                timed_out = True
+            if result.exit_code != 0:
+                worst_exit = result.exit_code or 1
+
+        note = (
+            f"[fallback] pytest was unavailable; ran {len(files)} file(s) with "
+            f"{os.path.basename(base_cmd[0])} instead. A pass here means nothing "
+            f"raised at module scope, not that a test suite succeeded."
+        )
+        return ExecutionResult(
+            command=f"{' '.join(base_cmd)} <{len(files)} test file(s)>",
+            exit_code=worst_exit,
+            stdout=note + "\n\n" + "\n\n".join(stdout_parts),
+            stderr="\n\n".join(stderr_parts),
+            timed_out=timed_out,
+            duration_seconds=time.time() - started,
+        )
 
     def run_lint(
         self,
