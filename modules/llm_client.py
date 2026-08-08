@@ -16,6 +16,10 @@ from typing import Optional, Any
 
 _LOG = logging.getLogger("agent.llm_client")
 
+# ─────────────────────────────────────────────
+# Provider availability checks
+# ─────────────────────────────────────────────
+
 try:
     import anthropic
     _ANTHROPIC_AVAILABLE = True

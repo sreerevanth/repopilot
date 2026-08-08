@@ -126,7 +126,14 @@ Examples:
 
     # API key
     parser.add_argument("--api-key", default=None,
-                        help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
+                        help="API key for the LLM provider (default: provider-specific env var)")
+    parser.add_argument("--model", default=None,
+                        help="LLM model name (default: provider-specific, or AGENT_MODEL env var)")
+    parser.add_argument("--provider", default="anthropic",
+                        choices=["anthropic", "openai", "gemini", "ollama"],
+                        help="LLM provider to use (default: anthropic)")
+    parser.add_argument("--api-base-url", default=None,
+                        help="Custom API base URL (for Ollama or self-hosted endpoints)")
 
     # Model configuration
     parser.add_argument("--model", default=None,
