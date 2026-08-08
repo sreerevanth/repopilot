@@ -27,6 +27,11 @@ except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+# Kept as an alias: the constant was renamed to DEFAULT_MODEL but three call
+# sites below still reference MODEL. Aliasing is safer than renaming them,
+# since anything importing MODEL from this module keeps working.
+MODEL = DEFAULT_MODEL
 MAX_TOKENS = 8192
 
 # Price per million tokens (input_price, output_price)
@@ -265,72 +270,40 @@ def _end_progress(chars: int) -> None:
     sys.stderr.flush()
 
 
-class LLMClient:
-    def __init__(self, api_key: Optional[str] = None, stream: bool = True):
-        if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            )
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
-        self.client = anthropic.Anthropic(api_key=key)
-        self.stream = stream
+class BudgetExceededError(RuntimeError):
+    """
+    Raised when accumulated spend reaches the configured --max-cost.
 
-    def _call_streaming(self) -> str:
+    agent_loop imports this and catches it before its generic handler, so a
+    deliberate stop is reported as "budget_exceeded" rather than "the API
+    broke". The class was lost in a merge while its import survived.
+    """
+
+
+class BaseLLMClient:
+    """
+    Shared behaviour for every provider client.
+
+    The `class BaseLLMClient:` header was lost in a merge, which left this
+    body absorbed into a duplicate `class LLMClient:` and every subclass
+    inheriting from an undefined name. Restored here along with the two
+    methods that went with it.
+    """
+
+    def __init__(self, model: str = MODEL):
+        self.model = model
+        self.input_tokens_used = 0
+        self.output_tokens_used = 0
+        self.total_cost = 0.0
+
+    def _estimate_tokens(self, text: str) -> int:
         """
-        Stream the response, echoing progress, and return the full text.
+        Rough token count from character length.
 
-        Only a progress indicator is echoed, not the raw deltas. The response is
-        a single JSON object whose largest field is complete file contents, so
-        printing it verbatim would dump the rewritten source into the terminal
-        and bury everything else.
+        Deliberately an estimate: it feeds cost reporting, not a hard budget,
+        and a real tokenizer would mean a dependency per provider.
         """
-        chars = 0
-        parts: list[str] = []
-        with self.client.messages.stream(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": self._prompt}],
-        ) as stream:
-            for text in stream.text_stream:
-                parts.append(text)
-                chars += len(text)
-                _emit_progress(chars)
-        _end_progress(chars)
-        return "".join(parts)
-
-    def _call_blocking(self) -> str:
-        response = self.client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": self._prompt}],
-        )
-        return response.content[0].text
-
-    def _call(self, prompt: str, retries: int = 3) -> str:
-        """Raw API call with retry on transient errors."""
-        self._prompt = prompt
-        for attempt in range(retries):
-            try:
-                if self.stream:
-                    try:
-                        return self._call_streaming()
-                    except AttributeError:
-                        # An SDK or a stub without messages.stream(). Falling
-                        # back is better than failing a run over a progress
-                        # indicator.
-                        _LOG.debug("streaming unavailable; using a blocking call")
-                        self.stream = False
-                return self._call_blocking()
-            except Exception as e:
-                if attempt == retries - 1:
-                    raise
-                wait = 2 ** attempt
-                time.sleep(wait)
-        raise RuntimeError("LLM call failed after retries")
+        return max(1, len(text or "") // 4)
 
     def _calculate_cost(self, input_tok: int, output_tok: int) -> float:
         pricing = MODEL_PRICING.get(self.model, (0.0, 0.0))

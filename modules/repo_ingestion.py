@@ -5,6 +5,7 @@ Recursively scans a project, ignores noise, stores file content + metadata.
 
 import fnmatch
 import os
+import re
 import hashlib
 import logging
 from dataclasses import dataclass, field
