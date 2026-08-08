@@ -48,6 +48,7 @@ class AgentConfig:
     interactive: bool = False   # pause for review after tests pass, before commit
 
     # Execution
+    skip_tests: bool = False               # accept the LLM's own verdict instead
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
     skip_tests: bool = False               # accept the LLM's own verdict instead
@@ -531,7 +532,10 @@ class AutonomousAgent:
                     self.logger.record_iteration(iter_record)
                     continue
 
-            exec_result = self._run_execution()
+            if cfg.skip_tests:
+                exec_result = self._skipped_execution(llm_resp.confidence)
+            else:
+                exec_result = self._run_execution()
             self.logger.log_execution(exec_result)
             last_exec = exec_result
 
@@ -546,7 +550,13 @@ class AutonomousAgent:
 
             # ── Step 6: Success check ──
             if exec_result.success:
-                self.logger.info(f"  Tests passed on iteration {iteration}")
+                if cfg.skip_tests:
+                    self.logger.warning(
+                        f"  Accepting iteration {iteration} without running tests "
+                        f"(--skip-tests, confidence {llm_resp.confidence:.2f})."
+                    )
+                else:
+                    self.logger.info(f"  Tests passed on iteration {iteration}")
 
                 changed_paths = [c.path for c in last_changes]
                 if not self._confirm_commit(changed_paths):
