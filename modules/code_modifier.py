@@ -352,12 +352,36 @@ class CodeModificationEngine:
                 results.append(future.result())
         return results
 
+    def _prune_empty_dirs(self, start: str) -> None:
+        """
+        Remove directories left empty by removing a created file.
+
+        `create` makes intermediate directories, so deleting pkg/new.py without
+        this leaves an empty pkg/ behind -- which git ignores but a developer
+        looking at their tree does not. Walks up only while directories are
+        empty, and never past the repo root.
+        """
+        root = os.path.abspath(self.repo_root)
+        current = os.path.abspath(start)
+        while current.startswith(root) and current != root:
+            try:
+                if os.listdir(current):
+                    return
+                os.rmdir(current)
+            except OSError:
+                return
+            current = os.path.dirname(current)
+
     def rollback(self, results: list[ApplyResult]) -> list[str]:
         """
-        Restore all backed-up files. Used if the iteration should be fully reverted.
-        Returns list of restored paths.
+        Revert an applied set of changes.
+
+        Restores backed-up files, removes files that were created (they have no
+        backup to restore), and removes the destination of a rename. Returns
+        every path that was reverted, restored or removed alike.
         """
         restored = []
+        removed: list[str] = []
         for result in results:
             # A rename left a file at the destination. Restoring the backup to
             # the original path is not enough on its own -- without this the
@@ -370,6 +394,23 @@ class CodeModificationEngine:
                 except Exception:
                     pass
 
+            # A successful "create" has no backup -- _backup returns None when
+            # the file did not exist -- so restoring backups alone leaves the
+            # new file in the tree. `git status` then shows an untracked file
+            # after a rollback that reported success.
+            if result.action == "create" and result.success:
+                try:
+                    abs_path = self._safe_abs_path(result.path)
+                    if os.path.isfile(abs_path):
+                        os.remove(abs_path)
+                        removed.append(result.path)
+                        self._prune_empty_dirs(os.path.dirname(abs_path))
+                except OSError as exc:
+                    _LOG.warning(
+                        "could not remove created file %s: %s", result.path, exc
+                    )
+                continue
+
             if result.backup_path and os.path.exists(result.backup_path):
                 try:
                     abs_path = self._safe_abs_path(result.path)
@@ -377,7 +418,9 @@ class CodeModificationEngine:
                     restored.append(result.path)
                 except Exception:
                     pass
-        return restored
+        # Removed creations are reverted paths too. Callers report this count
+        # to the user, and omitting them would understate what was undone.
+        return restored + removed
 
     def verify_changes(self, changes: list[FileChange]) -> list[str]:
         """
