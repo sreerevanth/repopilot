@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Optional
 
 from modules.repo_ingestion import ingest_repository, ingest_repository_parallel, Repository
-from modules.context_builder import build_context
+from modules.context_builder import build_context, budget_for_model
 from modules.llm_client import (
     BudgetExceededError,
     FileChange,
@@ -93,6 +93,7 @@ class AgentConfig:
     anthropic_api_key: Optional[str] = None
     verbose_payloads: bool = False         # dump raw LLM request/response
     model: Optional[str] = None
+    context_budget: Optional[int] = None   # chars; derived from the model if unset
     provider: str = "anthropic"
 
     # Context
@@ -404,6 +405,11 @@ class AutonomousAgent:
             context = build_context(
                 repo, cfg.task,
                 extra_paths=cfg.force_include_paths,
+                char_budget=(
+                    cfg.context_budget
+                    if cfg.context_budget
+                    else budget_for_model(cfg.model)
+                ),
             )
             self.logger.log_context([f.path for f in context.files], context.total_chars)
             context_str = context.render()

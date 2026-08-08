@@ -15,6 +15,46 @@ from modules.repo_ingestion import FileRecord, Repository
 
 CONTEXT_CHAR_BUDGET = 60_000
 
+# Context window per model, in tokens. There is no API that reports this, so it
+# is a table -- the same approach MODEL_PRICING already takes for prices.
+MODEL_CONTEXT_TOKENS = {
+    "claude-sonnet-4-20250514": 200_000,
+    "claude-3-5-sonnet-20241022": 200_000,
+    "claude-3-5-haiku-20241022": 200_000,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gemini-1.5-pro": 1_000_000,
+    "gemini-1.5-flash": 1_000_000,
+    "llama3": 8_000,
+}
+
+# Characters per token, for converting a window into a character budget.
+#
+# This is an estimate and worth being explicit about, because issue #72 was
+# filed against an assumption of this kind that did not actually exist. English
+# prose runs around 4; source code is denser -- punctuation, indentation and
+# short identifiers all tokenise poorly -- so 3.0 is used to err on the side of
+# sending too little rather than overflowing the window.
+CHARS_PER_TOKEN = 3.0
+
+# Share of the window the repository context may occupy. The rest is left for
+# the system prompt, the task, previous error output on a retry, and the
+# model's own reply, which needs room to return complete file contents.
+CONTEXT_WINDOW_FRACTION = 0.35
+
+
+def budget_for_model(model: Optional[str], default: int = CONTEXT_CHAR_BUDGET) -> int:
+    """
+    Character budget for a model, or the default when the model is unknown.
+
+    Falling back rather than guessing at an unknown model's window keeps a new
+    or self-hosted model working at today's behaviour instead of overflowing.
+    """
+    window = MODEL_CONTEXT_TOKENS.get(model or "")
+    if not window:
+        return default
+    return int(window * CONTEXT_WINDOW_FRACTION * CHARS_PER_TOKEN)
+
 LANGUAGE_PRIORITY = {
     "python": 10, "javascript": 10, "typescript": 10, "java": 9,
     "go": 9, "rust": 9, "cpp": 8, "c": 8, "csharp": 8,
