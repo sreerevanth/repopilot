@@ -209,6 +209,15 @@ def main():
         sys.exit(2)
 
     repo_root = os.path.abspath(args.repo)
+    if args.list_resumable:
+        from modules.run_state import list_resumable
+        candidates = list_resumable(args.log_dir)
+        if not candidates:
+            print("No resumable runs found.")
+        for run_id in candidates:
+            print(run_id)
+        sys.exit(0)
+
     if args.rollback:
         modifier = CodeModificationEngine(repo_root=repo_root, backup_dir="backups")
         success = modifier.git_stash_pop(repo_root)

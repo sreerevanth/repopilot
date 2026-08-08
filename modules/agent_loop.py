@@ -308,6 +308,31 @@ class AutonomousAgent:
         last_exec: Optional[ExecutionResult] = None
         last_changes: list[FileChange] = []
         last_apply_results: list[ApplyResult] = []
+        start_iteration = 1
+
+        if cfg.resume_from:
+            state = load_state(cfg.log_dir, cfg.resume_from)
+            check_resumable(state, cfg.repo_root, cfg.task)
+            start_iteration = state.iteration + 1
+            self.branch_name = state.branch_name or self.branch_name
+            last_changes = [FileChange(**c) for c in state.last_changes]
+            if state.last_exit_code is not None:
+                # Rebuilt rather than stored whole: the retry prompt only reads
+                # these four fields, and persisting a full ExecutionResult would
+                # tie the state file to that dataclass's shape.
+                last_exec = ExecutionResult(
+                    command="(restored from a previous run)",
+                    exit_code=state.last_exit_code,
+                    stdout=state.last_stdout,
+                    stderr=state.last_stderr,
+                    timed_out=False,
+                    duration_seconds=0.0,
+                )
+            self.logger.info(
+                f"  Resuming '{cfg.resume_from}' at iteration {start_iteration} "
+                f"({len(last_changes)} change(s) from the previous attempt)."
+            )
+
         outcome = "failed"
         self.pr_url = None
         iterations_used = 0
@@ -685,6 +710,11 @@ class AutonomousAgent:
             self.logger.warning("  Rolling back file changes due to failed run...")
             restored = self.modifier.rollback(last_apply_results)
             self.logger.info(f"  Rolled back {len(restored)} file(s): {restored}")
+
+        if outcome not in ("failed", "max_retries", "error"):
+            # A run that ended deliberately has nothing to resume. Leaving the
+            # checkpoint would offer to continue a finished run.
+            clear_state(cfg.log_dir, self.run_id)
 
         final_message = {
             "budget_exceeded": (
