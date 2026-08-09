@@ -263,3 +263,30 @@ def test_a_subdirectory_is_not_treated_as_the_repo(repo):
     nested.mkdir(parents=True)
 
     assert is_git_repo(str(nested)) is False
+
+
+# ── outcome pairing (#267) ────────────────────────────────────────────────
+
+
+def test_the_outcome_zip_is_strict():
+    """
+    Without strict=True, a worktree that failed to create makes paths shorter
+    than tasks, zip stops at the shortest, and the extra tasks disappear from
+    the outcomes — the run reports success for what it produced and says
+    nothing about what it dropped.
+    """
+    source = (
+        Path(__file__).resolve().parents[1] / "modules" / "parallel_tasks.py"
+    ).read_text(encoding="utf-8")
+
+    assert "zip(tasks, branches, worktrees.paths, strict=True)" in source
+
+
+def test_mismatched_lengths_raise_rather_than_truncate():
+    """The behaviour the flag buys, stated directly."""
+    tasks, branches, paths = ["a", "b", "c"], ["x", "y", "z"], ["p", "q"]
+
+    assert len(list(zip(tasks, branches, paths))) == 2
+
+    with pytest.raises(ValueError):
+        list(zip(tasks, branches, paths, strict=True))
