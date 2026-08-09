@@ -23,6 +23,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+from modules.errors import ExecutionError
 
 _LOG = logging.getLogger("agent.parallel_tasks")
 
@@ -33,7 +34,7 @@ MAX_PARALLEL_TASKS = 4
 GIT_TIMEOUT = 120
 
 
-class WorktreeError(RuntimeError):
+class WorktreeError(ExecutionError, RuntimeError):
     """Raised when an isolated checkout cannot be prepared."""
 
 
