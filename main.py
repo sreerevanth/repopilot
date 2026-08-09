@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 
@@ -28,7 +29,7 @@ from modules.task_source import (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser = argparse.ArgumentParser(
         description="Autonomous AI Developer Agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -225,7 +226,10 @@ Examples:
                              "committing. Ignored when --yes is set or CI=true.")
 
 
-    return parser.parse_args()
+    # The parser comes back too. Merging a config file needs to know what each
+    # flag's default actually is and what type it declares, and neither is
+    # recoverable from the Namespace alone.
+    return parser.parse_args(), parser
 
 
 def write_github_output(outputs: dict[str, str]):
@@ -319,8 +323,98 @@ def _report_expected_error(error) -> None:
     sys.exit(1)
 
 
+def apply_config_file(
+    path: str,
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    """
+    Merge a config file into the parsed arguments.
+
+    Precedence is defaults, then the config file, then the command line. That
+    is the order every other tool uses, and the previous implementation got it
+    wrong in both directions.
+
+    It guarded each key with
+
+        getattr(args, k) in (None, "anthropic", "claude-sonnet-4-20250514", False)
+
+    trying to express "apply this only where the user did not pass a flag".
+    argparse does not record whether a value came from the command line or from
+    `default=`, so that guard approximated the question by comparing against
+    four literals -- and the approximation failed both ways.
+
+    Fourteen settings could never be configured, because their defaults are not
+    in that tuple: timeout, max_iter, workers, runner, base_branch, log_dir and
+    others. A config file setting them did nothing, silently.
+
+    And a config value could beat an explicit flag: "anthropic" is in the tuple,
+    so `--provider anthropic --config c.json` with `{"provider": "openai"}` ran
+    against OpenAI. The file won over the command line.
+
+    Comparing against the parser's own defaults answers the question the old
+    guard was approximating, for every flag, without a list of literals to keep
+    in step.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            config_data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Warning: failed to load config file {path}: {exc}", file=sys.stderr)
+        return
+
+    if not isinstance(config_data, dict):
+        print(
+            f"Warning: config file {path} must contain a JSON object, "
+            f"found {type(config_data).__name__}; ignoring it",
+            file=sys.stderr,
+        )
+        return
+
+    actions = {action.dest: action for action in parser._actions if action.dest != "help"}
+    defaults = {dest: action.default for dest, action in actions.items()}
+
+    for key, value in config_data.items():
+        action = actions.get(key)
+
+        # An unknown key was previously dropped in silence, so a typo was
+        # indistinguishable from a setting the build does not support -- both
+        # produced no output at all. A warning rather than an error, since a
+        # config shared across versions may carry a key an older build predates.
+        if action is None:
+            print(
+                f"Warning: config file key '{key}' matches no option, ignoring",
+                file=sys.stderr,
+            )
+            continue
+
+        # The command line wins. A value differing from the parser's default is
+        # one the user supplied, which is the question the old literal tuple was
+        # trying and failing to answer.
+        if getattr(args, key, None) != defaults[key]:
+            continue
+
+        # Coerce through the flag's own type. Without this a string reaches a
+        # field the loop uses as an integer, and the failure surfaces as a
+        # TypeError several hundred lines away with no mention of the file or
+        # the key that caused it.
+        if action.type is not None and value is not None:
+            try:
+                value = action.type(value)
+            except (TypeError, ValueError):
+                print(
+                    f"Warning: config file key '{key}' should be "
+                    f"{getattr(action.type, '__name__', action.type)}, "
+                    f"found {value!r}; ignoring it",
+                    file=sys.stderr,
+                )
+                continue
+
+        setattr(args, key, value)
+
+
 def main():
-    args = parse_args()
+    args, parser = parse_args()
 
     if args.tasks:
         sys.exit(_run_task_batch(args))
@@ -337,15 +431,7 @@ def main():
     # Configuration file support (#22)
     config_file = args.config or os.path.join(args.repo or ".", ".repopilot.json")
     if os.path.exists(config_file):
-        try:
-            import json
-            with open(config_file, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-                for k, v in config_data.items():
-                    if hasattr(args, k) and getattr(args, k) in (None, "anthropic", "claude-sonnet-4-20250514", False):
-                        setattr(args, k, v)
-        except Exception as e:
-            print(f"Warning: Failed to load config file {config_file}: {e}", file=sys.stderr)
+        apply_config_file(config_file, args, parser)
 
 
     repo_root = os.path.abspath(args.repo)
