@@ -454,6 +454,7 @@ class BaseLLMClient:
         verbose: bool = False,
         max_cost: Optional[float] = None,
         system_prompt: Optional[str] = None,
+        cache=None,
     ):
         self.model = model
         self.verbose = verbose
@@ -461,6 +462,9 @@ class BaseLLMClient:
         # Per-instance so a run can override it; falls back to the module
         # constant, which is itself loaded from prompts/system.txt.
         self.system_prompt = system_prompt or SYSTEM_PROMPT
+        # Optional and injected, so this module need not know where a cache
+        # lives or whether one exists.
+        self.cache = cache
         self.input_tokens_used = 0
         self.output_tokens_used = 0
         self.total_cost = 0.0
@@ -514,8 +518,23 @@ class BaseLLMClient:
         request. Funnelling every path through one method is what stops a new
         request type reintroducing that.
         """
-        self._check_budget()
         input_tok = self._estimate_tokens(prompt + self.system_prompt)
+
+        # Checked before the budget: a cache hit costs nothing, so a run that
+        # has reached its limit can still be served rather than stopping on a
+        # request it is not going to pay for.
+        key = None
+        if self.cache is not None:
+            from modules.response_cache import cache_key
+
+            key = cache_key(self.model, self.system_prompt, prompt)
+            cached = self.cache.get(key)
+            if cached is not None:
+                if self.verbose:
+                    _dump_payload("response (cached)", cached)
+                return cached, input_tok
+
+        self._check_budget()
         if self.verbose:
             _dump_payload("system prompt", self.system_prompt)
             _dump_payload("request", prompt)
@@ -525,6 +544,8 @@ class BaseLLMClient:
         if self.verbose:
             _dump_payload("response", raw)
         self._record_usage(input_tok, self._estimate_tokens(raw))
+        if key is not None:
+            self.cache.put(key, raw)
         return raw, input_tok
 
     def _estimate_tokens(self, text: str) -> int:
@@ -872,8 +893,9 @@ class LLMClient(BaseLLMClient):
                  provider: str = "anthropic", verbose: bool = False,
                  max_cost: Optional[float] = None,
                  api_base_url: Optional[str] = None,
-                 system_prompt: Optional[str] = None):
-        super().__init__(model, verbose, max_cost, system_prompt)
+                 system_prompt: Optional[str] = None,
+                 cache=None):
+        super().__init__(model, verbose, max_cost, system_prompt, cache)
         self.provider = provider.lower()
         if self.provider == "openai":
             self.underlying_client = OpenAIClient(api_key, model)
@@ -889,6 +911,7 @@ class LLMClient(BaseLLMClient):
         self.underlying_client.verbose = verbose
         self.underlying_client.max_cost = max_cost
         self.underlying_client.system_prompt = self.system_prompt
+        self.underlying_client.cache = cache
 
     def _call(self, prompt: str) -> str:
         return self.underlying_client._call(prompt)
