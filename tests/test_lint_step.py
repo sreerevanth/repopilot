@@ -163,7 +163,10 @@ def test_a_lint_failure_short_circuits_the_iteration():
     """Running a suite that cannot import is wasted time."""
     source = AGENT_LOOP.read_text(encoding="utf-8")
     start = source.index("if cfg.lint_runner:")
-    block = source[start:start + 2400]
+    # Bound to the branch body rather than a fixed window, which proved only
+    # that the text appeared somewhere nearby.
+    branch = source.index("if not lint_result.success:")
+    block = source[branch:source.index("continue", branch) + len("continue")]
 
     assert "if not lint_result.success:" in block
     assert "continue" in block

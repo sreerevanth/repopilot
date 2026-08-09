@@ -1,9 +1,13 @@
 """
 Tests for streamed LLM responses (modules/llm_client.py).
 
-A blocking call sits silent for 20-30 seconds. Streaming shows progress while
-the response arrives. The response is still parsed as one JSON object at the
-end — see the note in the PR about why the deltas are not parsed incrementally.
+`AnthropicClient._call` streams the response via `messages.stream()` and falls
+back to a blocking `messages.create()` if streaming raises. Neither path had
+coverage.
+
+An earlier version of this file tested `_call_streaming`/`_call_blocking` on a
+single-client design that the multi-provider refactor replaced. Rewritten
+against what actually shipped.
 
 No test contacts the API.
 """
@@ -16,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from modules.llm_client import LLMClient  # noqa: E402
+from modules.llm_client import AnthropicClient  # noqa: E402
 
 RESPONSE = '{"analysis":"a","changes":[],"confidence":0.9,"done":true}'
 
@@ -32,37 +36,45 @@ class FakeStream:
         return False
 
 
-def make_client(stream=True, streaming_available=True, chunks=None, raises=None):
-    """Build a client without an API key or the anthropic package."""
-    client = object.__new__(LLMClient)
-    messages = SimpleNamespace()
+def client(chunks=None, stream_raises=None, blocking=RESPONSE):
+    """An AnthropicClient with a stubbed SDK, built without a key or the package."""
+    obj = object.__new__(AnthropicClient)
+    obj.model = "claude-sonnet-4-20250514"
+    obj.verbose = False
+    obj.max_cost = None
+    obj.input_tokens_used = obj.output_tokens_used = 0
+    obj.total_cost = 0.0
 
     calls = {"stream": 0, "create": 0}
 
-    if streaming_available:
-        def _stream(**kwargs):
-            calls["stream"] += 1
-            if raises is not None:
-                raise raises
-            return FakeStream(chunks if chunks is not None else [RESPONSE])
-        messages.stream = _stream
+    def _stream(**kwargs):
+        calls["stream"] += 1
+        if stream_raises is not None:
+            raise stream_raises
+        return FakeStream(chunks if chunks is not None else [RESPONSE])
 
     def _create(**kwargs):
         calls["create"] += 1
-        return SimpleNamespace(content=[SimpleNamespace(text=RESPONSE)])
-    messages.create = _create
+        return SimpleNamespace(content=[SimpleNamespace(text=blocking)])
 
-    client.client = SimpleNamespace(messages=messages)
-    client.stream = stream
-    client.calls = calls
-    return client
+    obj.client = SimpleNamespace(messages=SimpleNamespace(stream=_stream, create=_create))
+    obj.calls = calls
+    return obj
 
 
-# ── the streamed text is reassembled correctly ────────────────────────────
+# ── the streaming path ────────────────────────────────────────────────────
 
 
-def test_streaming_returns_the_whole_response():
-    assert make_client()._call("prompt") == RESPONSE
+def test_a_streamed_response_is_returned_whole():
+    assert client()._call("prompt") == RESPONSE
+
+
+def test_streaming_is_preferred_over_blocking():
+    stub = client()
+    stub._call("prompt")
+
+    assert stub.calls["stream"] == 1
+    assert stub.calls["create"] == 0
 
 
 @pytest.mark.parametrize("size", [1, 3, 7, 13, 500])
@@ -74,84 +86,101 @@ def test_chunk_boundaries_do_not_corrupt_the_json(size):
     import json
 
     chunks = [RESPONSE[i:i + size] for i in range(0, len(RESPONSE), size)]
-    parsed = json.loads(make_client(chunks=chunks)._call("prompt"))
 
-    assert parsed["confidence"] == 0.9
-
-
-def test_an_empty_stream_returns_an_empty_string():
-    """Handled by the existing parse-error path rather than raising here."""
-    assert make_client(chunks=[])._call("prompt") == ""
+    assert json.loads(client(chunks=chunks)._call("prompt"))["confidence"] == 0.9
 
 
 def test_unicode_survives_reassembly():
     payload = '{"analysis":"café — naïve","changes":[],"confidence":0.5,"done":false}'
     chunks = [payload[i:i + 3] for i in range(0, len(payload), 3)]
-    client = make_client(chunks=chunks)
 
-    assert client._call("prompt") == payload
-
-
-# ── choosing a path ───────────────────────────────────────────────────────
+    assert client(chunks=chunks)._call("prompt") == payload
 
 
-def test_streaming_is_used_by_default():
-    client = make_client()
-    client._call("prompt")
-
-    assert client.calls["stream"] == 1
-    assert client.calls["create"] == 0
+def test_an_empty_stream_returns_an_empty_string():
+    """Left to the existing parse-error path rather than raising here."""
+    assert client(chunks=[])._call("prompt") == ""
 
 
-def test_streaming_can_be_disabled():
-    client = make_client(stream=False)
-    client._call("prompt")
-
-    assert client.calls["create"] == 1
-    assert client.calls["stream"] == 0
+# ── the fallback ──────────────────────────────────────────────────────────
 
 
-def test_an_sdk_without_streaming_falls_back():
-    """A progress indicator is not worth failing a run over."""
-    client = make_client(streaming_available=False)
-
-    assert client._call("prompt") == RESPONSE
-    assert client.calls["create"] == 1
-
-
-def test_the_fallback_is_remembered():
-    """Otherwise every call would re-attempt streaming and fail again."""
-    client = make_client(streaming_available=False)
-    client._call("prompt")
-
-    assert client.stream is False
-
-
-def test_both_paths_return_the_same_text():
-    assert make_client()._call("p") == make_client(stream=False)._call("p")
-
-
-# ── errors still retry ────────────────────────────────────────────────────
-
-
-def test_a_streaming_error_is_retried():
-    client = make_client(raises=RuntimeError("connection reset"))
-
-    with pytest.raises(RuntimeError):
-        client._call("prompt", retries=3)
-
-    assert client.calls["stream"] == 3
-
-
-# ── progress output ───────────────────────────────────────────────────────
-
-
-def test_progress_is_silent_when_stderr_is_redirected(monkeypatch, capsys):
+def test_a_streaming_failure_falls_back_to_a_blocking_call():
     """
-    Progress uses a carriage return to overwrite one line. In a log file or a CI
-    job that produces a wall of partial lines, so it is suppressed off a tty.
+    A provider that does not support streaming, or a mid-stream disconnect,
+    should not fail the iteration when a blocking call would work.
     """
-    monkeypatch.setattr(sys.stderr, "isatty", lambda: False, raising=False)
-    make_client(chunks=["a", "b", "c"])._call("prompt")
+    stub = client(stream_raises=RuntimeError("streaming unavailable"))
 
-    assert capsys.readouterr().err == ""
+    assert stub._call("prompt") == RESPONSE
+    assert stub.calls["create"] == 1
+
+
+def test_the_fallback_returns_the_blocking_content():
+    stub = client(stream_raises=RuntimeError("boom"), blocking='{"done":true}')
+
+    assert stub._call("prompt") == '{"done":true}'
+
+
+def test_streaming_is_attempted_before_the_fallback():
+    stub = client(stream_raises=RuntimeError("boom"))
+    stub._call("prompt")
+
+    assert stub.calls["stream"] == 1
+
+
+# ── the model and prompt are passed through ───────────────────────────────
+
+
+def test_the_configured_model_is_used():
+    seen = {}
+    stub = client()
+
+    def _stream(**kwargs):
+        seen.update(kwargs)
+        return FakeStream([RESPONSE])
+
+    stub.client.messages.stream = _stream
+    stub._call("prompt")
+
+    assert seen["model"] == "claude-sonnet-4-20250514"
+
+
+def test_the_prompt_is_sent_as_the_user_message():
+    seen = {}
+    stub = client()
+
+    def _stream(**kwargs):
+        seen.update(kwargs)
+        return FakeStream([RESPONSE])
+
+    stub.client.messages.stream = _stream
+    stub._call("a distinctive prompt")
+
+    assert seen["messages"][0]["content"] == "a distinctive prompt"
+    assert seen["messages"][0]["role"] == "user"
+
+
+def test_the_system_prompt_is_sent():
+    seen = {}
+    stub = client()
+
+    def _stream(**kwargs):
+        seen.update(kwargs)
+        return FakeStream([RESPONSE])
+
+    stub.client.messages.stream = _stream
+    stub._call("prompt")
+
+    assert seen["system"]
+
+
+# ── it parses ─────────────────────────────────────────────────────────────
+
+
+def test_a_streamed_response_parses_into_an_LLMResponse():
+    stub = client()
+    result = stub.initial_request("task", "context")
+
+    assert result.confidence == 0.9
+    assert result.done is True

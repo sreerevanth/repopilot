@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from modules.agent_loop import AgentConfig  # noqa: E402
 from modules.llm_client import (  # noqa: E402
+    BaseLLMClient,
     PLAN_PROMPT_TEMPLATE,
     TASK_PROMPT_TEMPLATE,
     LLMClient,
@@ -34,7 +35,7 @@ GOOD_PLAN = (
 
 
 def client():
-    return object.__new__(LLMClient)
+    return BaseLLMClient()
 
 
 def parse(raw):
@@ -158,11 +159,17 @@ def test_a_missing_plan_file_falls_back(monkeypatch, tmp_path):
 # ── the execution prompt ──────────────────────────────────────────────────
 
 
-class Recorder(LLMClient):
+# LLMClient is a facade that delegates to a provider in
+# self.underlying_client. Test doubles subclass BaseLLMClient, which is
+# where _call, _parse_response and the request methods actually live.
+class Recorder(BaseLLMClient):
     def __init__(self):
+        # super() sets model, verbose, system_prompt and the token counters that
+        # the request methods read. Skipping it leaves the double half-built.
+        super().__init__()
         self.prompts = []
 
-    def _call(self, prompt, retries=3):
+    def _call(self, prompt):
         self.prompts.append(prompt)
         return '{"analysis":"a","changes":[],"confidence":0.9,"done":true}'
 

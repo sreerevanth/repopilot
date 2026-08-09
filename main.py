@@ -297,6 +297,7 @@ def main():
 
         # LLM
         anthropic_api_key=args.api_key,
+        max_cost=args.max_cost,
         api_base_url=args.api_base_url,
         verbose_payloads=args.verbose_payloads,
         quiet=args.quiet,
