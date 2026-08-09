@@ -280,7 +280,35 @@ class LLMResponse:
 
 SYSTEM_PROMPT = load_prompt("system", _BUILTIN_SYSTEM_PROMPT)
 TASK_PROMPT_TEMPLATE = load_prompt("initial", _BUILTIN_TASK_PROMPT)
+# How much of the diff to send. Enough to describe the change, bounded because
+# this is an extra paid call on top of the run that produced the diff.
+PR_DIFF_CHARS = 12_000
+
+_BUILTIN_PR_PROMPT = """\
+A code change has been made to satisfy this task:
+
+{task}
+
+Here is the diff:
+
+{diff}
+
+Write a pull request title and description for it.
+
+Return ONLY a JSON object:
+
+{{
+  "title": "<one line, imperative, under 72 characters>",
+  "body": "<markdown; what changed and why, not a restatement of the task>"
+}}
+
+Describe what the diff actually does. If it does less than the task asked for,
+say so -- a description that oversells the change is worse than a plain one.
+"""
+
+
 RETRY_PROMPT_TEMPLATE = load_prompt("retry", _BUILTIN_RETRY_PROMPT)
+PR_PROMPT_TEMPLATE = load_prompt("pr", _BUILTIN_PR_PROMPT)
 PLAN_PROMPT_TEMPLATE = load_prompt("plan", _BUILTIN_PLAN_PROMPT)
 PLAN_PROMPT_TEMPLATE = load_prompt("plan", _BUILTIN_PLAN_PROMPT)
 
@@ -369,6 +397,25 @@ def load_system_prompt(path: str) -> str:
             "parse.", ", ".join(missing),
         )
     return text
+
+
+
+def _parse_pr_description(raw: str) -> tuple:
+    """Pull the title and body out of a response, or (None, None)."""
+    text = (raw or "").strip()
+    start, end = text.find("{"), text.rfind("}") + 1
+    if start == -1 or end == 0:
+        return None, None
+    try:
+        data = json.loads(text[start:end])
+    except json.JSONDecodeError:
+        return None, None
+
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("body") or "").strip()
+    if not title or not body:
+        return None, None
+    return title[:72], body
 
 
 class BudgetExceededError(RuntimeError):
@@ -573,6 +620,33 @@ class BaseLLMClient:
             risks=as_list("risks"),
             confidence=float(data.get("confidence", 0.5)),
         )
+
+    def pr_description_request(self, task: str, diff: str) -> tuple:
+        """
+        Ask for a pull request title and body describing what changed.
+
+        Returns (title, body). Falls back to the templated pair on any failure:
+        a PR that opens with a plain description is better than a run that
+        succeeded and then died writing prose about itself.
+
+        Routed through _accounted_call, so this extra request is budget-checked
+        and its cost recorded like any other -- --pr with --max-cost should not
+        be able to overshoot because of the description.
+        """
+        prompt = PR_PROMPT_TEMPLATE.format(
+            task=task, diff=diff[:PR_DIFF_CHARS]
+        )
+        try:
+            raw, _ = self._accounted_call(prompt)
+        except BudgetExceededError:
+            raise
+        except Exception as exc:
+            _LOG.warning(
+                "Could not generate a PR description (%s); using the template.", exc
+            )
+            return None, None
+
+        return _parse_pr_description(raw)
 
     def plan_request(self, task: str, context_str: str) -> Plan:
         """
