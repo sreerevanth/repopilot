@@ -31,7 +31,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
 from modules.errors import ConfigurationError
 
 _LOG = logging.getLogger("agent.doc_lookup")

@@ -12,10 +12,9 @@ import ssl
 import sys
 import urllib.error
 import urllib.request
-import time
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional
 from modules.errors import ConfigurationError, ProviderError, AgentError
 
 _LOG = logging.getLogger("agent.llm_client")

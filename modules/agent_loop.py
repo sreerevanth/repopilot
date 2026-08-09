@@ -40,7 +40,6 @@ from modules.sandbox import (
     parse_coverage_percent,
 )
 from modules.git_integration import GitIntegration
-from modules.doc_lookup import perform_lookups, render_lookups
 from modules.run_state import (
     RunState,
     check_resumable,
