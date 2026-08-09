@@ -4,10 +4,12 @@ Branch creation, staging, committing, pushing.
 Optionally creates GitHub PRs via REST API.
 """
 
+import logging
 import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -21,6 +23,8 @@ class GitResult:
     output: str
     error: str
 
+
+_LOG = logging.getLogger("agent.git")
 
 PUSH_REMEDIES = {
     "non-fast-forward": (
@@ -48,6 +52,19 @@ PUSH_REMEDIES = {
         "Push failed. The commit is safe locally; push manually to inspect."
     ),
 }
+
+
+# A transient push is worth retrying; anything else is not. Retrying an auth
+# failure or a protected-branch refusal just delays the same error, and
+# retrying a non-fast-forward is handled by rebasing rather than by waiting.
+RETRYABLE_PUSH_REASONS = frozenset({"network"})
+
+PUSH_RETRIES = 3
+
+# First backoff in seconds; doubled each attempt, so 1s then 2s. Deliberately
+# short -- a person is watching this run, and a flake that has not cleared in
+# a few seconds usually is not a flake.
+PUSH_BACKOFF_SECONDS = 1.0
 
 
 def classify_push_failure(stderr: str) -> str:
@@ -268,6 +285,23 @@ class GitIntegration:
             return result
 
         reason = classify_push_failure(result.error)
+
+        # Network failures are retried with exponential backoff. The classifier
+        # already told these apart from auth, protected-branch and
+        # non-fast-forward failures, none of which get better by waiting.
+        attempt = 1
+        while reason in RETRYABLE_PUSH_REASONS and attempt < PUSH_RETRIES:
+            delay = PUSH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            _LOG.warning(
+                "Push failed (%s); retrying in %.0fs (attempt %d of %d).",
+                reason, delay, attempt + 1, PUSH_RETRIES,
+            )
+            time.sleep(delay)
+            result = self._run(cmd)
+            if result.success:
+                return result
+            reason = classify_push_failure(result.error)
+            attempt += 1
 
         if reason == "non-fast-forward" and retry_with_rebase and not force:
             rebase = self.rebase_onto_remote(branch, remote)
