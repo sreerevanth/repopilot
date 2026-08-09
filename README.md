@@ -192,6 +192,111 @@ stdin.
 
 ---
 
+## Examples
+
+Each of these uses flags that exist today; run `python main.py --help` for the full list.
+
+### Fix a failing test
+
+```bash
+python main.py --repo . --task "calculate_average raises ZeroDivisionError on an empty list; add a guard and a test"
+```
+
+Naming the symptom and the file gets a better first attempt than "fix the tests". The
+agent reads the repository, but it cannot see what you saw fail.
+
+### See what the model would be sent, before spending anything
+
+```bash
+python main.py --repo . --task "Refactor the parser" --context-only
+```
+
+Prints the compiled context and exits. No API key needed and no request made, so it is
+the cheapest way to check the right files are being selected. If the file you care about
+is missing, add it:
+
+```bash
+python main.py --repo . --task "Refactor the parser" --include src/parser.py --context-only
+```
+
+### Put a ceiling on what a run can cost
+
+```bash
+python main.py --repo . --task "Migrate to the new API" --max-cost 1.00
+```
+
+Stops before the call that would exceed a dollar. Cost is only known once a response
+arrives, so a run can overshoot by at most one call.
+
+### Ask for a plan before any code is written
+
+```bash
+python main.py --repo . --task "Add rate limiting to the client" --plan-first
+```
+
+Costs one extra call on the first iteration. Worth it when the task is ambiguous enough
+that you would rather read the approach than the diff.
+
+### Confirm each commit before it happens
+
+```bash
+python main.py --repo . --task "Tighten the input validation" --interactive
+```
+
+Shows the changed paths and asks before committing. Declining leaves the changes in the
+working tree, so you can inspect them and commit in your own words.
+
+### Run tests in a container rather than on your machine
+
+```bash
+python main.py --repo . --task "Fix the failing suite" --runner pytest
+```
+
+Docker is used when it is available, with the network disabled, memory capped and the
+container removed afterwards. If Docker is not running the sandbox says so and falls
+back to a subprocess — check the log rather than assuming isolation.
+
+### Work on a project with its own conventions
+
+```bash
+echo "- Target Python 3.9; do not use match statements." >> .agentcontext
+echo "- Tests live in spec/, not tests/." >> .agentcontext
+python main.py --repo . --task "Add a retry helper"
+```
+
+`.agentcontext` is read on every iteration and applies to every task in the repository.
+
+### Run several tasks at once
+
+```bash
+python main.py --repo . --tasks \
+  "Fix the parser TypeError" \
+  "Add caching to the client" \
+  "Update the README examples"
+```
+
+Each task gets its own git worktree and branch, so they can touch the same files without
+interfering. Review the branches afterwards and merge the ones you want.
+
+### Work out why a run went wrong
+
+```bash
+python main.py --repo . --task "..." --verbose
+```
+
+Prints the exact prompt and the raw reply, with known secret patterns masked. Between
+this and `--context-only`, most "why did it do that" questions answer themselves.
+
+### Undo a run
+
+```bash
+python main.py --repo . --rollback
+```
+
+Pops the git stash taken before the changes were applied.
+
+---
+
 ## Task Sources
 
 `--task` normally carries a description. It can instead carry a GitHub issue
