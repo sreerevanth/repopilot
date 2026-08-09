@@ -17,8 +17,33 @@ on:
 
 jobs:
   imports:
-    name: Package imports and CLI starts
-    runs-on: ubuntu-latest
+    # Windows is in the matrix because three Windows-only bugs reached main
+    # this cycle and none was caught here: --update walking into an ancestor
+    # repository, _discover_test_files emitting backslash paths that then broke
+    # inside the Linux container, and _docker_mount_path passing raw Windows
+    # paths to Docker. All three were found by running the suite by hand.
+    #
+    # The path-handling surface is large -- code_modifier, sandbox,
+    # git_integration and housekeeping all build paths -- and a Linux-only
+    # matrix is structurally blind to it.
+    #
+    # fail-fast is off so a Windows-specific failure does not cancel the Linux
+    # run: knowing whether a break is platform-specific is most of the
+    # diagnosis, and cancelling the other job removes exactly that signal.
+    name: Package imports and CLI starts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    # Every step here uses a `python - <<'PY'` heredoc, which PowerShell -- the
+    # default shell on windows-latest -- does not understand. bash ships with
+    # the Windows runner, so setting it once at the job level keeps one
+    # workflow rather than two that can drift apart.
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout Repository
