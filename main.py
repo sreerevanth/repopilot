@@ -177,6 +177,10 @@ Examples:
                              "spent (e.g. --max-cost 1.00). Off by default.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-approve file changes (bypass confirmation prompt)")
+    parser.add_argument("--step", action="store_true",
+                        help="Pause after each iteration so you can inspect the "
+                             "working tree before the next one. Needs a terminal; "
+                             "ignored when output is piped or --yes is set.")
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="After tests pass, show the diff and confirm before "
                              "committing. Ignored when --yes is set or CI=true.")
@@ -318,6 +322,7 @@ def main():
         context_only=args.context_only,
         yes=yes_flag,
         interactive=args.interactive,
+        step=args.step,
 
         # Execution
         plan_first=args.plan_first,
