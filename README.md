@@ -297,6 +297,105 @@ Pops the git stash taken before the changes were applied.
 
 ---
 
+## Flag reference
+
+Every flag `python main.py --help` accepts, grouped by what it affects.
+Worked examples of the common ones are in [Examples](#examples).
+
+### Task and repository
+
+| Flag                   | Purpose                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo`               | Path to the git repository (not needed with --update)                                                                                     |
+| `--task`               | High-level task description, or a GitHub issue URL to pull one from (can also be provided via AGENT_TASK env var)                         |
+| `--tasks`              | Run several tasks concurrently, each in its own git worktree on its own branch. Implies isolation, so tasks may touch the same files.     |
+| `--max-parallel-tasks` | How many tasks to run at once (default: 4)                                                                                                |
+| `--include`            | Force-include specific file paths in context (relative to repo root)                                                                      |
+| `--context-budget`     | Characters of repository context to send. Derived from the model's context window when not set.                                           |
+| `--context-only`       | Print the compiled LLM context and exit, before any API call is made. Use it to check which files were selected without spending credits. |
+
+### Model and provider
+
+| Flag                  | Purpose                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--provider`          | LLM provider to use (default: anthropic)                                                                                                                                                |
+| `--model`             | LLM model name (default: provider-specific, or AGENT_MODEL env var)                                                                                                                     |
+| `--api-key`           | API key for the LLM provider (default: provider-specific env var)                                                                                                                       |
+| `--api-base-url`      | Custom API base URL (for Ollama or self-hosted endpoints)                                                                                                                               |
+| `--fallback-provider` | Try this provider when the primary fails with a transient error such as a 500 or an overload.                                                                                           |
+| `--fallback-api-key`  | Key for the fallback provider (defaults to --api-key).                                                                                                                                  |
+| `--system-prompt`     | Replace the default system prompt with the contents of a file. The JSON output contract must be preserved or responses will not parse.                                                  |
+| `--cache`             | Reuse a stored response when the model, system prompt and full prompt are identical. Off by default: requests are not deterministic, so this changes behaviour as well as saving money. |
+| `--max-cost`          | Stop before the next LLM call once this much has been spent (e.g. --max-cost 1.00). Off by default.                                                                                     |
+| `--plan-first`        | Ask the model for an approach before it writes code. Costs one extra API call on the first iteration.                                                                                   |
+
+### Tests and linting
+
+| Flag                | Purpose                                                                                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--runner`          | Test runner to use (default: pytest)                                                                                                                  |
+| `--runner-args`     | Extra arguments to pass to the test runner                                                                                                            |
+| `--run-file`        | Run a specific file instead of the test suite                                                                                                         |
+| `--run-file-runner` | Runner for --run-file (default: python)                                                                                                               |
+| `--skip-tests`      | Do not run a test suite. Changes are accepted on the model's confidence alone - suitable for refactors and comment passes, not for behaviour changes. |
+| `--lint`            | Run a linter before the test suite. A failure short-circuits the iteration and feeds the lint output back to the model.                               |
+| `--coverage`        | Measure test coverage and fail an iteration that lowers it. Requires pytest-cov.                                                                      |
+| `--coverage-source` | What --cov points at (default: .)                                                                                                                     |
+
+### Git
+
+| Flag              | Purpose                                                                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--no-git`        | Disable git operations entirely                                                                                                               |
+| `--base-branch`   | Base branch for PR and branch creation (default: main)                                                                                        |
+| `--branch-prefix` | Prefix for the auto-created branch name (default: agent)                                                                                      |
+| `--push`          | Push the branch to remote after success                                                                                                       |
+| `--pr`            | Create a GitHub PR after pushing (requires GITHUB_TOKEN)                                                                                      |
+| `--describe-pr`   | With --pr, ask the model to write the PR title and body from the diff. Costs one extra call; falls back to the standard template if it fails. |
+| `--no-commit`     | Stage successful changes but do not commit them. Leaves them in the index for you to review and commit yourself.                              |
+| `--rollback`      | Undo the last agent run by popping the git stash.                                                                                             |
+| `--undo`          | Undo a previous run: leave its branch and delete it. Defaults to the most recent run. Use --list-runs to see them.                            |
+| `--list-runs`     | List runs that --undo could remove, then exit.                                                                                                |
+
+### Running and review
+
+| Flag               | Purpose                                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--interactive`    | After tests pass, show the diff and confirm before committing. Ignored when --yes is set or CI=true.                                                |
+| `--step`           | Pause after each iteration so you can inspect the working tree before the next one. Needs a terminal; ignored when output is piped or --yes is set. |
+| `--dry-run`        | Preview changes without applying them. Saves a manifest to logs/.                                                                                   |
+| `--yes`            | Auto-approve file changes (bypass confirmation prompt)                                                                                              |
+| `--resume`         | Continue an interrupted run from its last completed iteration. Use --list-resumable to see candidates.                                              |
+| `--list-resumable` | List run ids that can be resumed, then exit.                                                                                                        |
+| `--timeout`        | Execution timeout in seconds (default: 120)                                                                                                         |
+
+### Output and upkeep
+
+| Flag                 | Purpose                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--verbose`          | Print the exact prompt sent to the LLM and the raw response, to stderr. Known secret patterns are masked.                                               |
+| `--quiet`            | Suppress verbose output                                                                                                                                 |
+| `--log-dir`          | Directory for log files (default: logs/ inside repo)                                                                                                    |
+| `--clean`            | Remove this tool's old logs and backups, then exit. Only files it created are touched.                                                                  |
+| `--clean-older-than` | With --clean, keep anything newer than this.                                                                                                            |
+| `--config`           | Path to configuration JSON file (default: .repopilot.json in repo root)                                                                                 |
+| `--update`           | Fast-forward RepoPilot's own checkout to the latest upstream commit. Refuses on a dirty tree or a diverged branch, and never installs packages for you. |
+
+### Other
+
+| Flag              | Purpose                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| `--help`          | show this help message and exit                                                                              |
+| `--no-pre-commit` | Skip the repository's pre-commit hooks even when .pre-commit-config.yaml is present.                         |
+| `--lint-args`     | Extra arguments for --lint                                                                                   |
+| `--max-iter`      | Maximum number of agent iterations (default: 5)                                                              |
+| `--parallel`      | Enable parallel file processing (ingestion and modification)                                                 |
+| `--workers`       | Number of worker threads for parallel processing (default: 10)                                               |
+| `--project-rules` | Per-repo rules file, read from the repo root and prepended to every prompt. Pass an empty string to disable. |
+| `--backup-dir`    | Directory for file backups (default: backups/ inside repo)                                                   |
+
+---
+
 ## Task Sources
 
 `--task` normally carries a description. It can instead carry a GitHub issue
