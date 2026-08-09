@@ -47,6 +47,7 @@ from modules.run_state import (
     save_state,
 )
 from modules.project_rules import load_project_rules, render_project_rules
+from modules.change_summary import render_change_summary, summarise_changes
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
 from modules.token_tracker import TokenTracker
@@ -412,6 +413,10 @@ class AutonomousAgent:
         last_exec: Optional[ExecutionResult] = None
         last_changes: list[FileChange] = []
         last_apply_results: list[ApplyResult] = []
+        # Every applied change across the whole run, not just the last
+        # iteration -- the end-of-run summary reports net effect, and
+        # last_apply_results is overwritten each time round.
+        all_apply_results: list[ApplyResult] = []
         start_iteration = 1
 
         if cfg.resume_from:
@@ -702,6 +707,7 @@ class AutonomousAgent:
                 self.logger.log_apply_results(apply_results)
                 last_changes = valid_changes
                 last_apply_results = apply_results
+                all_apply_results.extend(apply_results)
                 self._applied = apply_results
 
                 iter_record.apply_results = [
@@ -936,6 +942,12 @@ class AutonomousAgent:
                 "or run with --rollback to discard them."
             ),
         }.get(outcome, "Unknown outcome")
+
+        # Printed before the run record closes, so it sits with the outcome
+        # rather than scrolling past earlier in the log.
+        changed = summarise_changes(all_apply_results)
+        if changed:
+            self.logger.info("\n" + render_change_summary(changed))
 
         self.logger.finish_run(outcome, self.branch_name, self.pr_url)
 
