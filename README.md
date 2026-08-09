@@ -266,6 +266,10 @@ python main.py --repo . --task "Add a retry helper"
 
 `.agentcontext` is read on every iteration and applies to every task in the repository.
 
+**Commit it.** The file describes the project rather than the person working on it, so
+everyone on the repository — and every fresh clone — gets the same conventions. It is
+deliberately not in `.gitignore` for that reason, the same way `.editorconfig` is not.
+
 ### Run several tasks at once
 
 ```bash

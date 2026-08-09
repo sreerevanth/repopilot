@@ -26,3 +26,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 node_modules/
+
+# Response cache written by --cache (#222). Committing it would put model
+# replies into the repository, and the agent itself runs `git add -A`.
+.repopilot-cache/
