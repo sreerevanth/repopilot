@@ -365,12 +365,66 @@ class BaseLLMClient:
     methods that went with it.
     """
 
-    def __init__(self, model: str = MODEL, verbose: bool = False):
+    def __init__(
+        self,
+        model: str = MODEL,
+        verbose: bool = False,
+        max_cost: Optional[float] = None,
+    ):
         self.model = model
         self.verbose = verbose
+        self.max_cost = max_cost
         self.input_tokens_used = 0
         self.output_tokens_used = 0
         self.total_cost = 0.0
+
+    def _check_budget(self) -> None:
+        """
+        Stop before the next call once --max-cost has been reached.
+
+        Checked before spending rather than after, so the limit is a ceiling on
+        what gets spent rather than a report of what already was. Cost is only
+        known once a response arrives, so a run can overshoot by at most one
+        call -- there is no way to price a request before making it.
+        """
+        if self.max_cost is None:
+            return
+        if self.total_cost >= self.max_cost:
+            raise BudgetExceededError(
+                f"Spent ${self.total_cost:.4f}, which reaches the --max-cost "
+                f"limit of ${self.max_cost:.2f}. Stopping before the next call."
+            )
+
+    def _record_usage(self, input_tok: int, output_tok: int) -> None:
+        """Add one call's tokens and cost to the running totals."""
+        self.input_tokens_used += input_tok
+        self.output_tokens_used += output_tok
+        self.total_cost += self._calculate_cost(input_tok, output_tok)
+
+    def _accounted_call(self, prompt: str) -> tuple:
+        """
+        The only way a paid call should be made.
+
+        Every request goes through here so the budget is checked and the cost
+        recorded exactly once. plan_request previously called _call directly,
+        which meant --plan-first spent money the budget never saw: the planning
+        call was not checked against the limit and its cost never reached
+        total_cost, so the next call could exceed the limit by more than one
+        request. Funnelling every path through one method is what stops a new
+        request type reintroducing that.
+        """
+        self._check_budget()
+        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
+        if self.verbose:
+            _dump_payload("system prompt", SYSTEM_PROMPT)
+            _dump_payload("request", prompt)
+
+        raw = self._call(prompt)
+
+        if self.verbose:
+            _dump_payload("response", raw)
+        self._record_usage(input_tok, self._estimate_tokens(raw))
+        return raw, input_tok
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -399,11 +453,10 @@ class BaseLLMClient:
         start = text.find("{")
         end = text.rfind("}") + 1
         
+        # Usage is recorded by _accounted_call, which every request path goes
+        # through. Adding it again here would double-count every call.
         output_tok = self._estimate_tokens(raw)
         cost = self._calculate_cost(input_tok, output_tok)
-        self.input_tokens_used += input_tok
-        self.output_tokens_used += output_tok
-        self.total_cost += cost
 
         if start == -1 or end == 0:
             return LLMResponse(
@@ -469,19 +522,25 @@ class BaseLLMClient:
         )
 
     def plan_request(self, task: str, context_str: str) -> Plan:
-        """Ask for an approach before any code is written."""
-        prompt = PLAN_PROMPT_TEMPLATE.format(task=task, context=context_str)
-        return self._parse_plan(self._call(prompt))
+        """
+        Ask for an approach before any code is written.
 
-    def initial_request(self, task: str, context_str: str) -> LLMResponse:
+        Routed through _accounted_call: a planning pass is a paid request like
+        any other, and previously it was neither budget-checked nor counted.
+        """
+        prompt = PLAN_PROMPT_TEMPLATE.format(task=task, context=context_str)
+        raw, _ = self._accounted_call(prompt)
+        return self._parse_plan(raw)
+
+    def initial_request(
+        self, task: str, context_str: str, plan: Optional["Plan"] = None
+    ) -> LLMResponse:
         prompt = TASK_PROMPT_TEMPLATE.format(task=task, context=context_str)
-        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
-        if self.verbose:
-            _dump_payload("system prompt", SYSTEM_PROMPT)
-            _dump_payload("request", prompt)
-        raw = self._call(prompt)
-        if self.verbose:
-            _dump_payload("response", raw)
+        if plan is not None and plan.usable:
+            # Appended rather than templated in, so the prompt is byte-identical
+            # when planning is off or the planning pass came back unusable.
+            prompt = f"{prompt}\n{plan.render()}\n"
+        raw, input_tok = self._accounted_call(prompt)
         return self._parse_response(raw, input_tok)
 
     def retry_request(
@@ -506,13 +565,7 @@ class BaseLLMClient:
             stderr=stderr[:4000] if stderr else "(empty)",
             context=context_str,
         )
-        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
-        if self.verbose:
-            _dump_payload("system prompt", SYSTEM_PROMPT)
-            _dump_payload("request", prompt)
-        raw = self._call(prompt)
-        if self.verbose:
-            _dump_payload("response", raw)
+        raw, input_tok = self._accounted_call(prompt)
         return self._parse_response(raw, input_tok)
 
 
@@ -689,8 +742,9 @@ class LLMClient(BaseLLMClient):
     
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL,
                  provider: str = "anthropic", verbose: bool = False,
+                 max_cost: Optional[float] = None,
                  api_base_url: Optional[str] = None):
-        super().__init__(model, verbose)
+        super().__init__(model, verbose, max_cost)
         self.provider = provider.lower()
         if self.provider == "openai":
             self.underlying_client = OpenAIClient(api_key, model)
@@ -704,12 +758,15 @@ class LLMClient(BaseLLMClient):
         # Set once after the chain rather than in each branch: the flag applies
         # to whichever provider was chosen, and one line cannot drift.
         self.underlying_client.verbose = verbose
+        self.underlying_client.max_cost = max_cost
 
     def _call(self, prompt: str) -> str:
         return self.underlying_client._call(prompt)
 
-    def initial_request(self, task: str, context_str: str) -> LLMResponse:
-        res = self.underlying_client.initial_request(task, context_str)
+    def initial_request(
+        self, task: str, context_str: str, plan: Optional["Plan"] = None
+    ) -> LLMResponse:
+        res = self.underlying_client.initial_request(task, context_str, plan)
         self.input_tokens_used = self.underlying_client.input_tokens_used
         self.output_tokens_used = self.underlying_client.output_tokens_used
         self.total_cost = self.underlying_client.total_cost

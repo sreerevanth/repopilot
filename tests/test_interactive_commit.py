@@ -194,7 +194,10 @@ def test_every_commit_path_is_gated():
     )
 
     for i in call_sites:
-        preceding = "\n".join(lines[max(0, i - 12):i])
+            # 20 rather than 12: the checkpoint added for #203 sits between the
+            # confirmation and the commit. The guard is unchanged -- confirmation
+            # must still precede every commit -- only the gap is wider.
+        preceding = "\n".join(lines[max(0, i - 20):i])
         assert "_confirm_commit" in preceding, (
             f"_commit_changes at line {i + 1} is not gated by _confirm_commit"
         )

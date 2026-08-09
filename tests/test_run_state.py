@@ -223,10 +223,17 @@ def test_the_loop_starts_from_the_saved_iteration():
 def test_state_is_saved_every_iteration():
     """A checkpoint written only at the end would never survive a crash."""
     text = source()
-    marker = "self.logger.record_iteration(iter_record)\n\n            save_state("
-    record = text.index(marker)
+    # Bound to the helper rather than a character window: every path that ends
+    # an iteration calls _checkpoint, including the lint-failure and parse-error
+    # paths that CodeRabbit flagged as previously unsaved.
+    assert "def _checkpoint(" in text
 
-    assert record > 0
+    finalisers = text.count("self.logger.record_iteration(iter_record)")
+    checkpoints = text.count("_checkpoint(self, cfg, iteration")
+
+    assert checkpoints == finalisers, (
+        f"{finalisers} iteration-ending paths but {checkpoints} checkpoints"
+    )
 
 
 def test_a_finished_run_clears_its_state():

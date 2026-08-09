@@ -39,7 +39,13 @@ from modules.sandbox import (
 )
 from modules.git_integration import GitIntegration
 from modules.doc_lookup import perform_lookups, render_lookups
-from modules.run_state import check_resumable, clear_state, load_state, save_state
+from modules.run_state import (
+    RunState,
+    check_resumable,
+    clear_state,
+    load_state,
+    save_state,
+)
 from modules.project_rules import load_project_rules, render_project_rules
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
@@ -61,6 +67,7 @@ class AgentConfig:
 
     # Execution
     skip_tests: bool = False               # accept the LLM's own verdict instead
+    plan_first: bool = False               # ask for an approach before coding
     plan_first: bool = False               # ask for an approach before coding
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
@@ -96,6 +103,8 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
+    max_cost: Optional[float] = None       # stop before the next call at this spend
+    resume_from: Optional[str] = None      # run_id to continue
     api_base_url: Optional[str] = None     # override the provider endpoint
     resume_from: Optional[str] = None      # run_id to continue
     quiet: bool = False                    # suppress debug-level output
@@ -141,6 +150,31 @@ def _stamp_timings(record, iter_started, ingest, context, llm, apply_, exec_phas
     record.duration_apply = round(apply_, 3)
     record.duration_execution = round(time.time() - exec_phase, 3)
     record.duration_total = round(time.time() - iter_started, 3)
+
+
+def _checkpoint(agent, cfg, iteration, last_changes, exec_result) -> None:
+    """
+    Persist resume state at the end of an iteration.
+
+    Called from every path that finishes one -- a lint failure, a parse error
+    and a coverage-gate failure all end an iteration just as a normal test run
+    does, and each previously left --resume with nothing to resume from. The
+    execution result is optional because those paths may not have one.
+    """
+    save_state(
+        RunState(
+            run_id=agent.run_id,
+            task=cfg.task,
+            repo_root=cfg.repo_root,
+            iteration=iteration,
+            branch_name=agent.branch_name,
+            last_changes=[c.__dict__ for c in (last_changes or [])],
+            last_exit_code=exec_result.exit_code if exec_result else None,
+            last_stdout=(exec_result.stdout[:8000] if exec_result else ""),
+            last_stderr=(exec_result.stderr[:8000] if exec_result else ""),
+        ),
+        cfg.log_dir,
+    )
 
 
 class AutonomousAgent:
@@ -214,6 +248,7 @@ class AutonomousAgent:
                 model=cfg.model,
                 provider=cfg.provider,
                 verbose=cfg.verbose_payloads,
+            max_cost=cfg.max_cost,
             api_base_url=cfg.api_base_url,
             )
         return self._llm
@@ -422,7 +457,7 @@ class AutonomousAgent:
             else:
                 self.logger.info(f"  Baseline coverage: {baseline_coverage:.1f}%")
 
-        for iteration in range(1, cfg.max_iterations + 1):
+        for iteration in range(start_iteration, cfg.max_iterations + 1):
             iterations_used = iteration
             self.logger.start_iteration(iteration)
 
@@ -592,6 +627,7 @@ class AutonomousAgent:
                         duration_llm, duration_apply, phase,
                     )
                     self.logger.record_iteration(iter_record)
+                    _checkpoint(self, cfg, iteration, last_changes, last_exec)
                     continue
 
             # ── Handle low confidence ──
@@ -608,6 +644,7 @@ class AutonomousAgent:
                     duration_llm, duration_apply, phase,
                 )
                 self.logger.record_iteration(iter_record)
+                _checkpoint(self, cfg, iteration, last_changes, last_exec)
                 continue
 
             duration_llm = time.time() - phase
@@ -681,6 +718,7 @@ class AutonomousAgent:
                         duration_llm, duration_apply, phase,
                     )
                     self.logger.record_iteration(iter_record)
+                    _checkpoint(self, cfg, iteration, last_changes, last_exec)
                     break
             else:
                 self.logger.info("  No file changes from LLM this iteration.")
@@ -702,6 +740,7 @@ class AutonomousAgent:
                         duration_llm, duration_apply, phase,
                     )
                     self.logger.record_iteration(iter_record)
+                    _checkpoint(self, cfg, iteration, last_changes, last_exec)
                     break
 
                 self._commit_changes(iteration, changed_paths)
@@ -712,6 +751,7 @@ class AutonomousAgent:
                     duration_llm, duration_apply, phase,
                 )
                 self.logger.record_iteration(iter_record)
+                _checkpoint(self, cfg, iteration, last_changes, last_exec)
                 break
 
             duration_apply = time.time() - phase
@@ -741,6 +781,7 @@ class AutonomousAgent:
                             duration_context, duration_llm, duration_apply, phase,
                         )
                         self.logger.record_iteration(iter_record)
+                        _checkpoint(self, cfg, iteration, last_changes, last_exec)
                         continue
 
             # ── Step 5: Execute ──
@@ -766,6 +807,7 @@ class AutonomousAgent:
                         duration_llm, duration_apply, phase,
                     )
                     self.logger.record_iteration(iter_record)
+                    _checkpoint(self, cfg, iteration, last_changes, last_exec)
                     continue
 
             if cfg.skip_tests:
@@ -787,6 +829,7 @@ class AutonomousAgent:
                 duration_llm, duration_apply, phase,
             )
             self.logger.record_iteration(iter_record)
+            _checkpoint(self, cfg, iteration, last_changes, last_exec)
 
             if cfg.coverage and exec_result.success:
                 current = parse_coverage_percent(

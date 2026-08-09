@@ -21,7 +21,7 @@ from modules.code_modifier import (  # noqa: E402
     VALID_ACTIONS,
     CodeModificationEngine,
 )
-from modules.llm_client import FileChange, LLMClient  # noqa: E402
+from modules.llm_client import BaseLLMClient, FileChange  # noqa: E402
 
 ORIGINAL = "def add(a, b):\n    return a + b\n"
 
@@ -228,19 +228,25 @@ def test_unknown_actions_are_still_rejected(engine):
 
 
 def test_new_path_is_parsed_from_the_response():
-    response = LLMClient._parse_response(
-        object.__new__(LLMClient),
+    # BaseLLMClient is where _parse_response lives; LLMClient is a facade that
+    # delegates to a provider. The second argument is the input token count,
+    # added when cost tracking moved onto the base class.
+    response = BaseLLMClient()._parse_response(
         '{"analysis":"a","changes":[{"path":"old.py","action":"rename",'
         '"new_path":"new.py","explanation":"e"}],"confidence":0.9,"done":true}',
+        0,
     )
     assert response.changes[0].new_path == "new.py"
 
 
 def test_absent_new_path_parses_as_none():
-    response = LLMClient._parse_response(
-        object.__new__(LLMClient),
+    # BaseLLMClient is where _parse_response lives; LLMClient is a facade that
+    # delegates to a provider. The second argument is the input token count,
+    # added when cost tracking moved onto the base class.
+    response = BaseLLMClient()._parse_response(
         '{"analysis":"a","changes":[{"path":"a.py","action":"modify",'
         '"content":"x","explanation":"e"}],"confidence":0.9,"done":true}',
+        0,
     )
     assert response.changes[0].new_path is None
 
