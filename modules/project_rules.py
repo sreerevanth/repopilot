@@ -48,7 +48,8 @@ def load_project_rules(
         return None
 
     try:
-        text = open(path, "r", encoding="utf-8", errors="replace").read()
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
     except OSError as exc:
         _LOG.warning("could not read %s: %s", path, exc)
         return None
