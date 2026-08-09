@@ -187,6 +187,22 @@ class GitIntegration:
 
         return self._run(["git", "checkout", branch_name])
 
+    def checkout(self, branch: str) -> GitResult:
+        """Switch to an existing branch."""
+        return self._run(["git", "checkout", branch])
+
+    def delete_branch(self, branch: str, force: bool = False) -> GitResult:
+        """
+        Delete a local branch.
+
+        `force` uses -D rather than -d. An agent branch is unmerged by
+        definition when someone decides they do not want it, so -d would refuse
+        exactly the case this exists for. The caller is responsible for having
+        asked first.
+        """
+        flag = "-D" if force else "-d"
+        return self._run(["git", "branch", flag, branch])
+
     def stage_all(self) -> GitResult:
         """Stage all modified and new files."""
         return self._run(["git", "add", "-A"])

@@ -161,6 +161,13 @@ Examples:
                              "iteration. Use --list-resumable to see candidates.")
     parser.add_argument("--list-resumable", action="store_true",
                         help="List run ids that can be resumed, then exit.")
+    parser.add_argument("--undo", nargs="?", const="__last__", default=None,
+                        metavar="RUN_ID",
+                        help="Undo a previous run: leave its branch and delete "
+                             "it. Defaults to the most recent run. Use "
+                             "--list-runs to see them.")
+    parser.add_argument("--list-runs", action="store_true",
+                        help="List runs that --undo could remove, then exit.")
     parser.add_argument("--clean", action="store_true",
                         help="Remove this tool's old logs and backups, then exit. "
                              "Only files it created are touched.")
@@ -329,6 +336,58 @@ def main():
             dry_run=args.dry_run,
         )
         print(render_clean_summary(results, dry_run=args.dry_run))
+        sys.exit(0)
+
+    if args.list_runs:
+        from modules.undo import describe, find_runs
+
+        runs = find_runs(os.path.join(repo_root, args.log_dir))
+        if not runs:
+            print("No runs found.")
+        for run in runs[:20]:
+            print(describe(run))
+            print()
+        sys.exit(0)
+
+    if args.undo:
+        from modules.dry_run import ask_confirmation
+        from modules.git_integration import GitIntegration
+        from modules.undo import UndoError, describe, find_run, undo_run
+
+        try:
+            run = find_run(
+                os.path.join(repo_root, args.log_dir),
+                None if args.undo == "__last__" else args.undo,
+            )
+        except UndoError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        print("\nThis will undo:\n")
+        print(describe(run))
+        print()
+
+        # Asked before removing anything. --yes skips it, matching every other
+        # confirmation, so CI is never left waiting on stdin.
+        # Computed here rather than read from the later yes_flag, which is
+        # defined below this block -- the run-configuration path has not been
+        # reached yet at this point.
+        skip_prompt = args.yes or os.environ.get("CI") == "true"
+        if not skip_prompt and not ask_confirmation("Delete this branch?"):
+            print("Left alone.")
+            sys.exit(0)
+
+        try:
+            done = undo_run(
+                GitIntegration(repo_root), run,
+                base_branch=args.base_branch,
+                branch_prefix=args.branch_prefix,
+            )
+        except UndoError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Undone: " + "; ".join(done))
         sys.exit(0)
 
     if args.rollback:
