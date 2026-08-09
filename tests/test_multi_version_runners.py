@@ -146,4 +146,8 @@ def test_the_existing_runners_are_untouched():
 
 
 def test_the_registry_grew_by_exactly_two():
-    assert len(RUNNERS) == 14
+    """
+    12 before tox and nox; 15 after make_default was split out in #165. Pinned
+    so a runner cannot be dropped unnoticed by a merge.
+    """
+    assert len(RUNNERS) == 15

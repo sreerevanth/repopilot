@@ -123,7 +123,7 @@ def test_the_count_matches_the_registry():
     Pinned so a runner cannot be dropped unnoticed. Raised from 12 to 14 when
     tox and nox were added for #153.
     """
-    assert len(ALLOWED_RUNNERS) == len(RUNNERS) == 14
+    assert len(ALLOWED_RUNNERS) == len(RUNNERS) == 15
 
 
 # ── what the registry makes possible ──────────────────────────────────────

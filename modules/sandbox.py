@@ -172,7 +172,15 @@ RUNNERS: dict = {
         LanguageRunner("nox", "python", ["nox"], module=None,
                        linters=("ruff", "flake8", "pyflakes")),
         LanguageRunner("bash", "bash", ["bash"]),
-        LanguageRunner("make", "make", ["make"]),
+        # `make test`, not bare `make`. A bare invocation runs the default
+        # target -- usually `all` or a build -- so run_tests("make") compiled
+        # the project and reported success while every test was skipped. That
+        # is worse than failing: a green result nobody earned.
+        #
+        # A Makefile with no `test` target now fails loudly with make's own
+        # "No rule to make target" rather than silently building instead.
+        LanguageRunner("make", "make", ["make", "test"]),
+        LanguageRunner("make_default", "make", ["make"]),
         LanguageRunner("go", "go", ["go", "test", "./..."], linters=("govet",)),
         LanguageRunner("cargo", "rust", ["cargo", "test"], linters=("clippy",)),
         LanguageRunner("ruby", "ruby", ["ruby"]),
