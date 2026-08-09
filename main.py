@@ -157,6 +157,12 @@ Examples:
                              "iteration. Use --list-resumable to see candidates.")
     parser.add_argument("--list-resumable", action="store_true",
                         help="List run ids that can be resumed, then exit.")
+    parser.add_argument("--clean", action="store_true",
+                        help="Remove this tool's old logs and backups, then exit. "
+                             "Only files it created are touched.")
+    parser.add_argument("--clean-older-than", type=float, default=None,
+                        metavar="DAYS",
+                        help="With --clean, keep anything newer than this.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
     # API key
@@ -298,6 +304,23 @@ def main():
             print("No resumable runs found.")
         for run_id in candidates:
             print(run_id)
+        sys.exit(0)
+
+    if args.clean:
+        from modules.housekeeping import clean, render_clean_summary
+
+        if not args.repo:
+            print("ERROR: --repo is required with --clean.", file=sys.stderr)
+            sys.exit(2)
+
+        results = clean(
+            os.path.abspath(args.repo),
+            log_dir=args.log_dir,
+            backup_dir=args.backup_dir,
+            older_than_days=args.clean_older_than,
+            dry_run=args.dry_run,
+        )
+        print(render_clean_summary(results, dry_run=args.dry_run))
         sys.exit(0)
 
     if args.rollback:
