@@ -175,9 +175,15 @@ def run_tasks(
 
     worktrees = create_worktrees(repo_root, tasks, branch_prefix, base_branch)
     branches = [f"{branch_prefix}/{slugify(t, i)}" for i, t in enumerate(tasks, 1)]
+    # strict=True rather than the default. Without it, a worktree that failed
+    # to create makes paths shorter than tasks, zip stops at the shortest, and
+    # the extra tasks disappear from the outcomes -- the run then reports
+    # success for what it did produce and says nothing about what it dropped.
+    # An exception here is loud at the point the lists disagree, which is the
+    # only point at which the disagreement can still be understood.
     outcomes = [
         TaskOutcome(task=t, branch=b, worktree=p)
-        for t, b, p in zip(tasks, branches, worktrees.paths)
+        for t, b, p in zip(tasks, branches, worktrees.paths, strict=True)
     ]
 
     try:
