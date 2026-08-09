@@ -148,3 +148,57 @@ jobs:
           python main.py --repo . --task "smoke" --no-git --context-only > /tmp/smoke.txt
           tail -5 /tmp/smoke.txt
           grep -q "No API call was made" /tmp/smoke.txt
+
+      - name: No duplicate definitions
+        # A merge that lands the same function twice leaves the second copy
+        # shadowing the first. It imports cleanly and passes every test, so
+        # nothing else here would notice -- `_apply_unified_diff` sat
+        # duplicated in code_modifier.py exactly this way.
+        run: |
+          python - <<'PY'
+          import ast, collections, os, sys
+
+          problems = []
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [
+                  d for d in dirs
+                  if not d.startswith(".") and d not in ("node_modules", "__pycache__")
+              ]
+              for name in sorted(files):
+                  if not name.endswith(".py"):
+                      continue
+                  path = os.path.join(root, name)
+                  try:
+                      tree = ast.parse(open(path, encoding="utf-8").read())
+                  except SyntaxError:
+                      continue
+
+                  counts = collections.Counter(
+                      node.name for node in tree.body
+                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                  )
+                  for symbol, count in counts.items():
+                      if count > 1:
+                          problems.append(f"{path}: {symbol} defined {count}x")
+
+                  for node in tree.body:
+                      if not isinstance(node, ast.ClassDef):
+                          continue
+                      methods = collections.Counter(
+                          item.name for item in node.body
+                          if isinstance(item, ast.FunctionDef)
+                      )
+                      for symbol, count in methods.items():
+                          if count > 1:
+                              problems.append(
+                                  f"{path}: {node.name}.{symbol} defined {count}x"
+                              )
+
+          for problem in problems:
+              print(f"FAIL {problem}")
+
+          if problems:
+              sys.exit(1)
+
+          print("no duplicate definitions")
+          PY
