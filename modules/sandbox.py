@@ -90,20 +90,89 @@ class ExecutionResult:
 # vitest is invoked as `vitest run` on purpose. Bare `vitest` starts a watch
 # server when it thinks it is interactive; under this sandbox it would hold the
 # process open until timeout_seconds elapsed and be reported as a test timeout.
-ALLOWED_RUNNERS = {
-    "python": [sys.executable],
-    "pytest": [sys.executable, "-m", "pytest"],
-    "node": ["node"],
-    "npm_test": ["npm", "test", "--"],
-    "vitest": ["npx", "--no-install", "vitest", "run"],
-    "jest": ["npx", "--no-install", "jest"],
-    "bash": ["bash"],
-    "make": ["make"],
-    "go": ["go", "test", "./..."],
-    "cargo": ["cargo", "test"],
-    "ruby": ["ruby"],
-    "rspec": ["bundle", "exec", "rspec"],
+@dataclass(frozen=True)
+class LanguageRunner:
+    """
+    Everything the sandbox needs to know about one runner, in one place.
+
+    This information used to live in five parallel dicts keyed by the same
+    strings -- ALLOWED_RUNNERS, DOCKER_RUNNERS, MODULE_RUNNERS,
+    RUNNER_FALLBACKS and the linter table. Adding a language meant remembering
+    all of them, and DOCKER_RUNNERS was 10/12 an exact copy of ALLOWED_RUNNERS
+    that existed only because two entries name the interpreter differently.
+
+    The old dicts are still exported, derived from this registry, so nothing
+    that imports them needs to change.
+    """
+
+    name: str
+    language: str
+    command: list[str]
+    # Only set where the container genuinely differs -- for Python the host uses
+    # sys.executable and the image uses whatever `python` resolves to. Ten of
+    # the twelve runners are identical either side and say nothing here.
+    container_command: Optional[list[str]] = None
+    # Runners invoked as `python -m <module>`: shutil.which sees the
+    # interpreter, which always exists, so availability needs an import probe.
+    module: Optional[str] = None
+    # What to try when this runner is unavailable, where a weaker signal beats
+    # none. Only defined where the fallback can actually run the same suite.
+    fallback: Optional[str] = None
+    linters: tuple = ()
+
+
+RUNNERS: dict = {
+    r.name: r
+    for r in [
+        LanguageRunner("python", "python", [sys.executable], ["python"]),
+        LanguageRunner(
+            "pytest", "python", [sys.executable, "-m", "pytest"],
+            ["python", "-m", "pytest"],
+            module="pytest", fallback="python",
+            linters=("ruff", "flake8", "pyflakes"),
+        ),
+        LanguageRunner("node", "javascript", ["node"]),
+        LanguageRunner("npm_test", "javascript", ["npm", "test", "--"],
+                       linters=("eslint", "tsc")),
+        LanguageRunner("vitest", "javascript",
+                       ["npx", "--no-install", "vitest", "run"],
+                       linters=("eslint", "tsc")),
+        LanguageRunner("jest", "javascript", ["npx", "--no-install", "jest"],
+                       linters=("eslint", "tsc")),
+        LanguageRunner("bash", "bash", ["bash"]),
+        LanguageRunner("make", "make", ["make"]),
+        LanguageRunner("go", "go", ["go", "test", "./..."], linters=("govet",)),
+        LanguageRunner("cargo", "rust", ["cargo", "test"], linters=("clippy",)),
+        LanguageRunner("ruby", "ruby", ["ruby"]),
+        LanguageRunner("rspec", "ruby", ["bundle", "exec", "rspec"]),
+    ]
 }
+
+
+def runners_for_language(language: str) -> list[str]:
+    """Runner names registered for a language, for callers choosing one."""
+    return sorted(name for name, r in RUNNERS.items() if r.language == language)
+
+
+def linters_for_runner(runner: str) -> tuple:
+    """Linters that make sense alongside a runner."""
+    entry = RUNNERS.get(runner)
+    return entry.linters if entry else ()
+
+
+# ── Derived views ───────────────────────────────────────────────────────
+#
+# Kept so existing imports keep working. Deriving them is the point: the
+# tables can no longer disagree with each other, because there is only one
+# table.
+
+ALLOWED_RUNNERS = {name: r.command for name, r in RUNNERS.items()}
+DOCKER_RUNNERS = {
+    name: (r.container_command or r.command) for name, r in RUNNERS.items()
+}
+MODULE_RUNNERS = {name: r.module for name, r in RUNNERS.items() if r.module}
+RUNNER_FALLBACKS = {name: r.fallback for name, r in RUNNERS.items() if r.fallback}
+
 
 # Linters run before the suite. A syntax error or an undefined name is caught in
 # under a second and gives the model a precise location, where the same mistake
@@ -129,20 +198,6 @@ ALLOWED_LINTERS = {
     "clippy": ["cargo", "clippy"],
 }
 
-DOCKER_RUNNERS = {
-    "python": ["python"],
-    "pytest": ["python", "-m", "pytest"],
-    "node": ["node"],
-    "npm_test": ["npm", "test", "--"],
-    "vitest": ["npx", "--no-install", "vitest", "run"],
-    "jest": ["npx", "--no-install", "jest"],
-    "bash": ["bash"],
-    "make": ["make"],
-    "go": ["go", "test", "./..."],
-    "cargo": ["cargo", "test"],
-    "ruby": ["ruby"],
-    "rspec": ["bundle", "exec", "rspec"],
-}
 
 # ---------------------------------------------------------------------------
 # Environment sanitization
@@ -302,13 +357,11 @@ def _build_safe_env(extra_env: Optional[dict] = None) -> dict:
 # which for these is the interpreter itself and therefore always present -- so
 # the "runner not found" guard never fires for them. Their availability has to
 # be probed by importing the module instead.
-MODULE_RUNNERS = {"pytest": "pytest"}
 
 # What each runner falls back to when it is unavailable. Only defined where the
 # fallback can actually run the same suite: `python -m pytest` and plain
 # `python <file>` both execute test files, so a repo whose tests are runnable as
 # scripts still gets a real signal. There is no equivalent for cargo or go.
-RUNNER_FALLBACKS = {"pytest": "python"}
 
 
 def _module_is_available(module: str) -> bool:
