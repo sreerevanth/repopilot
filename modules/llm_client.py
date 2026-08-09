@@ -717,6 +717,34 @@ class BaseLLMClient:
         return self._parse_response(raw, input_tok)
 
 
+def _first_text_block(content) -> str:
+    """
+    The first block in a reply that actually carries text.
+
+    `content[0].text` assumed index 0 is a TextBlock. It is a union -- thinking,
+    tool-use and tool-result blocks are all possible, and none of them has a
+    `text` attribute. A reply opening with one raised AttributeError and killed
+    the run, which #176's provider fallback would not have caught either, since
+    an AttributeError is not a transient API error.
+
+    Nothing enables those block types today. This is one config change away
+    rather than a live failure, and the cost of being right about it is a loop.
+    """
+    for block in content or []:
+        text = getattr(block, "text", None)
+        if text is not None:
+            return text
+
+    # An empty or all-non-text reply is a parse failure, not a crash: the
+    # caller already handles an unparseable response and will retry.
+    _LOG.warning(
+        "Reply contained no text block (%d block(s) of type %s).",
+        len(content or []),
+        ", ".join(sorted({getattr(b, "type", "?") for b in content or []})) or "none",
+    )
+    return ""
+
+
 class AnthropicClient(BaseLLMClient):
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL):
         super().__init__(model)
@@ -751,9 +779,7 @@ class AnthropicClient(BaseLLMClient):
                 system=self.system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
-            print(response.content[0].text)
-            print("\n")
-            return response.content[0].text
+            return _first_text_block(response.content)
 
 
 class OpenAIClient(BaseLLMClient):
@@ -790,8 +816,6 @@ class OpenAIClient(BaseLLMClient):
             with urllib.request.urlopen(req, context=ctx) as response:
                 res = json.loads(response.read().decode("utf-8"))
                 text = res["choices"][0]["message"]["content"]
-                print(text)
-                print("\n")
                 return text
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
@@ -834,8 +858,6 @@ class GeminiClient(BaseLLMClient):
             with urllib.request.urlopen(req, context=ctx) as response:
                 res = json.loads(response.read().decode("utf-8"))
                 text = res["candidates"][0]["content"]["parts"][0]["text"]
-                print(text)
-                print("\n")
                 return text
         except Exception as e:
             print(f"Error calling Gemini API: {e}")
@@ -877,8 +899,6 @@ class OllamaClient(BaseLLMClient):
             with urllib.request.urlopen(req, context=ctx) as response:
                 res = json.loads(response.read().decode("utf-8"))
                 text = res["message"]["content"]
-                print(text)
-                print("\n")
                 return text
         except Exception as e:
             print(f"Error calling Ollama API (is the Ollama server running at {self.api_base_url}?): {e}")
