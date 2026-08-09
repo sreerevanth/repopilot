@@ -105,64 +105,6 @@ def _apply_unified_diff(original: str, patch: str) -> str:
 
 import re
 
-def _apply_unified_diff(original: str, patch: str) -> str:
-    """Apply a unified diff patch to the original text in pure Python."""
-    original_lines = original.splitlines(keepends=True)
-    patch_lines = patch.splitlines(keepends=True)
-    
-    result_lines = []
-    orig_idx = 0
-    
-    hunk_re = re.compile(r'^@@\s+-(?P<old_start>\d+)(?:,(?P<old_len>\d+))?\s+\+(?P<new_start>\d+)(?:,(?P<new_len>\d+))?\s+@@')
-    
-    patch_idx = 0
-    # Skip diff header lines until the first hunk
-    while patch_idx < len(patch_lines) and not patch_lines[patch_idx].startswith('@@'):
-        patch_idx += 1
-        
-    if patch_idx == len(patch_lines):
-        # No hunks found, treat as full replacement fallback
-        return patch
-        
-    while patch_idx < len(patch_lines):
-        match = hunk_re.match(patch_lines[patch_idx])
-        if not match:
-            patch_idx += 1
-            continue
-            
-        old_start = int(match.group('old_start'))
-        # Adjust 1-based index to 0-based
-        old_start = max(0, old_start - 1)
-        
-        # Copy original lines up to the start of this hunk
-        result_lines.extend(original_lines[orig_idx:old_start])
-        orig_idx = old_start
-        
-        patch_idx += 1
-        # Process hunk lines
-        while patch_idx < len(patch_lines) and not patch_lines[patch_idx].startswith('@@'):
-            line = patch_lines[patch_idx]
-            patch_idx += 1
-            if line.startswith(' '):
-                # Context line: verify and copy
-                if orig_idx < len(original_lines):
-                    result_lines.append(original_lines[orig_idx])
-                    orig_idx += 1
-            elif line.startswith('-'):
-                # Deletion line: verify and skip original line
-                if orig_idx < len(original_lines):
-                    orig_idx += 1
-            elif line.startswith('+'):
-                # Addition line: append new line
-                result_lines.append(line[1:])
-                
-    # Copy any remaining original lines
-    if orig_idx < len(original_lines):
-        result_lines.extend(original_lines[orig_idx:])
-        
-    return "".join(result_lines)
-
-
 class CodeModificationEngine:
     def __init__(self, repo_root: str, backup_dir: str):
         self.repo_root = os.path.abspath(repo_root)
