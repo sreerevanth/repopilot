@@ -100,7 +100,8 @@ class AgentConfig:
     yes: bool = False
     no_commit: bool = False                # stage changes but leave them uncommitted
     git_push: bool = False                  # push to remote?
-    git_create_pr: bool = False             # create GitHub PR?
+    git_create_pr: bool = False
+    describe_pr: bool = False              # have the model write the PR title/body             # create GitHub PR?
 
     # Directories
     backup_dir: str = "backups"
@@ -1011,14 +1012,37 @@ class AutonomousAgent:
 
                 if push_result.success and cfg.git_create_pr:
                     diff_stat = self.git.diff_staged() or "See commit for changes."
+                    title = f"[Agent] {cfg.task[:72]}"
+                    body = (
+                        f"## Autonomous Agent PR\n\n"
+                        f"**Task:** {cfg.task}\n\n"
+                        f"**Run ID:** `{self.run_id}`\n\n"
+                        f"**Changes:**\n```\n{diff_stat}\n```"
+                    )
+
+                    if cfg.describe_pr:
+                        # One extra paid call, so it is opt-in. The templated
+                        # pair stays as the fallback: a PR that opens with a
+                        # plain description beats a run that succeeded and then
+                        # died writing prose about itself.
+                        written_title, written_body = self.llm.pr_description_request(
+                            cfg.task, self.git.diff_staged() or diff_stat
+                        )
+                        if written_title and written_body:
+                            title = written_title
+                            body = (
+                                f"{written_body}\n\n---\n"
+                                f"*Written by RepoPilot, run `{self.run_id}`.*"
+                            )
+                        else:
+                            self.logger.warning(
+                                "  Could not generate a PR description; "
+                                "using the standard template."
+                            )
+
                     self.pr_url = self.git.create_github_pr(
-                        title=f"[Agent] {cfg.task[:72]}",
-                        body=(
-                            f"## Autonomous Agent PR\n\n"
-                            f"**Task:** {cfg.task}\n\n"
-                            f"**Run ID:** `{self.run_id}`\n\n"
-                            f"**Changes:**\n```\n{diff_stat}\n```"
-                        ),
+                        title=title,
+                        body=body,
                         head_branch=self.branch_name,
                         base_branch=cfg.git_base_branch,
                     )

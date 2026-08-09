@@ -1,0 +1,19 @@
+A code change has been made to satisfy this task:
+
+{task}
+
+Here is the diff:
+
+{diff}
+
+Write a pull request title and description for it.
+
+Return ONLY a JSON object:
+
+{{
+  "title": "<one line, imperative, under 72 characters>",
+  "body": "<markdown; what changed and why, not a restatement of the task>"
+}}
+
+Describe what the diff actually does. If it does less than the task asked for,
+say so -- a description that oversells the change is worse than a plain one.

@@ -116,6 +116,10 @@ Examples:
                         help="Push the branch to remote after success")
     parser.add_argument("--pr", action="store_true",
                         help="Create a GitHub PR after pushing (requires GITHUB_TOKEN)")
+    parser.add_argument("--describe-pr", action="store_true",
+                        help="With --pr, ask the model to write the PR title and "
+                             "body from the diff. Costs one extra call; falls back "
+                             "to the standard template if it fails.")
     parser.add_argument("--base-branch", default="main",
                         help="Base branch for PR and branch creation (default: main)")
     parser.add_argument("--branch-prefix", default="agent",
@@ -380,6 +384,7 @@ def main():
         git_base_branch=args.base_branch,
         git_push=args.push,
         git_create_pr=args.pr,
+        describe_pr=args.describe_pr,
 
         # Dirs
         backup_dir=args.backup_dir,
