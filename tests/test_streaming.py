@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from modules.llm_client import AnthropicClient  # noqa: E402
+from modules.llm_client import SYSTEM_PROMPT, AnthropicClient  # noqa: E402
 
 RESPONSE = '{"analysis":"a","changes":[],"confidence":0.9,"done":true}'
 
@@ -41,6 +41,8 @@ def client(chunks=None, stream_raises=None, blocking=RESPONSE):
     obj = object.__new__(AnthropicClient)
     obj.model = "claude-sonnet-4-20250514"
     obj.verbose = False
+    obj.system_prompt = SYSTEM_PROMPT
+    obj.cache = None
     obj.max_cost = None
     obj.input_tokens_used = obj.output_tokens_used = 0
     obj.total_cost = 0.0

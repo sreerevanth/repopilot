@@ -119,15 +119,25 @@ jobs:
         # from the dataclass, so every run died with TypeError at construction.
         run: |
           python - <<'PY'
-          import dataclasses, re, sys
+          import ast, dataclasses, sys
 
           from modules.agent_loop import AgentConfig
 
           fields = {f.name for f in dataclasses.fields(AgentConfig)}
           source = open("main.py").read()
-          block = source[source.index("config = AgentConfig("):]
-          block = block[: block.index("\n    )")]
-          passed = set(re.findall(r"^\s+(\w+)=", block, re.MULTILINE))
+
+          # Parsed rather than sliced. The previous version cut from
+          # "config = AgentConfig(" to the next "\n    )", which swept up any
+          # other multi-line call inside that span. run_tasks() and clean()
+          # both sit there now, so their keyword arguments were reported as
+          # missing AgentConfig fields -- four false failures.
+          passed = set()
+          for node in ast.walk(ast.parse(source)):
+              if not isinstance(node, ast.Call):
+                  continue
+              called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+              if called == "AgentConfig":
+                  passed.update(kw.arg for kw in node.keywords if kw.arg)
 
           missing = sorted(passed - fields)
           for name in missing:
