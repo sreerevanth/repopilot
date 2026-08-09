@@ -17,6 +17,7 @@ import re
 import urllib.error
 import urllib.request
 from typing import Optional
+from modules.errors import ConfigurationError
 
 _LOG = logging.getLogger("agent.task_source")
 
@@ -38,7 +39,7 @@ MAX_COMMENT_CHARS = 1500
 MAX_COMMENTS = 10
 
 
-class TaskResolutionError(RuntimeError):
+class TaskResolutionError(ConfigurationError, RuntimeError):
     """Raised when a task URL is recognised but cannot be turned into a task."""
 
 

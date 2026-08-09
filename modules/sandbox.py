@@ -23,6 +23,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from typing import Optional
+from modules.errors import ExecutionError
 
 # Which executor actually ran a command. Recorded on every ExecutionResult so a
 # run log can be audited after the fact -- without this, a run that silently
@@ -42,7 +43,7 @@ _ACTIVE_CONTAINERS: set[str] = set()
 _ATEXIT_REGISTERED = False
 
 
-class SandboxUnavailableError(RuntimeError):
+class SandboxUnavailableError(ExecutionError, RuntimeError):
     """
     Raised when DockerSandbox(strict=True) cannot provide isolation.
 

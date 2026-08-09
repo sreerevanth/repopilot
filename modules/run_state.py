@@ -20,6 +20,7 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Optional
+from modules.errors import StateError
 
 _LOG = logging.getLogger("agent.run_state")
 
@@ -29,7 +30,7 @@ _LOG = logging.getLogger("agent.run_state")
 STATE_VERSION = 1
 
 
-class ResumeError(RuntimeError):
+class ResumeError(StateError, RuntimeError):
     """Raised when a run cannot be resumed from the requested state."""
 
 

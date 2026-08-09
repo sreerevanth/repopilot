@@ -16,6 +16,7 @@ import sys
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from modules.errors import AgentError
 from modules.updater import run_update
 from modules.agent_loop import AutonomousAgent, AgentConfig
 from modules.notify import notify_run_complete
@@ -282,6 +283,28 @@ def _run_task_batch(args) -> int:
     return 0 if all(o.ok for o in outcomes) else 1
 
 
+def _report_expected_error(error) -> None:
+    """
+    Report an anticipated failure and exit.
+
+    Shared so every path reports identically. Raised in review of #260: task
+    resolution caught TaskResolutionError separately, so a bad issue URL
+    printed a bare message, skipped any remedy, and wrote no GITHUB_OUTPUT --
+    a CI run saw no `outcome=error` at all.
+    """
+    message = error.user_message() if isinstance(error, AgentError) else str(error)
+    print(f"\nERROR: {message}", file=sys.stderr)
+    write_github_output({
+        "outcome": "error",
+        "run_id": "",
+        "iterations": "0",
+        "branch_name": "",
+        "pr_url": "",
+        "final_message": message,
+    })
+    sys.exit(1)
+
+
 def main():
     args = parse_args()
 
@@ -405,8 +428,7 @@ def main():
         try:
             task = resolve_task(task)
         except TaskResolutionError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
+            _report_expected_error(exc)
     if not task:
         print("ERROR: Task description is required. Provide --task or set the AGENT_TASK environment variable.", file=sys.stderr)
         sys.exit(1)
@@ -511,7 +533,14 @@ def main():
             "final_message": "Interrupted by user before any changes were applied.",
         })
         sys.exit(130)
+    except AgentError as e:
+        # A condition the agent anticipated -- a missing runner, a budget
+        # reached, an unreadable prompt file. The user needs the message and a
+        # remedy, not a traceback into code they did not write.
+        _report_expected_error(e)
     except Exception as e:
+        # Anything else means this tool has a bug. The traceback stays, because
+        # that is the part worth putting in a report.
         print(f"\nFATAL ERROR: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()

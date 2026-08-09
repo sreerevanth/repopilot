@@ -32,6 +32,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
+from modules.errors import ConfigurationError
 
 _LOG = logging.getLogger("agent.doc_lookup")
 
@@ -68,7 +69,7 @@ DEFAULT_TIMEOUT = 15
 MAX_LOOKUPS_PER_ITERATION = 3
 
 
-class LookupRefused(ValueError):
+class LookupRefused(ConfigurationError, ValueError):
     """Raised when a URL is not permitted. The message is shown to the model."""
 
 

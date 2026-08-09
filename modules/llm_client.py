@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Any
+from modules.errors import ConfigurationError, ProviderError
 
 _LOG = logging.getLogger("agent.llm_client")
 
@@ -367,7 +368,7 @@ def _dump_payload(label: str, body: str, redact: bool = True) -> None:
 REQUIRED_SCHEMA_KEYS = ("analysis", "changes", "confidence", "done")
 
 
-class SystemPromptError(ValueError):
+class SystemPromptError(ConfigurationError, ValueError):
     """Raised when a --system-prompt file cannot be used."""
 
 
@@ -418,7 +419,7 @@ def _parse_pr_description(raw: str) -> tuple:
     return title[:72], body
 
 
-class BudgetExceededError(RuntimeError):
+class BudgetExceededError(ProviderError, RuntimeError):
     """
     Raised when accumulated spend reaches the configured --max-cost.
 
