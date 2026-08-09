@@ -50,6 +50,12 @@ Examples:
     parser.add_argument("--repo", required=False,
                         help="Path to the git repository (not needed with --update)")
     parser.add_argument("--task", required=False, help="High-level task description, or a GitHub issue URL to pull one from (can also be provided via AGENT_TASK env var)")
+    parser.add_argument("--tasks", nargs="+", default=None, metavar="TASK",
+                        help="Run several tasks concurrently, each in its own git "
+                             "worktree on its own branch. Implies isolation, so "
+                             "tasks may touch the same files.")
+    parser.add_argument("--max-parallel-tasks", type=int, default=4, metavar="N",
+                        help="How many tasks to run at once (default: 4)")
 
     # Execution
     parser.add_argument("--runner", default="pytest",
@@ -194,8 +200,62 @@ def write_github_output(outputs: dict[str, str]):
             print(f"Failed to write to GITHUB_OUTPUT: {e}", file=sys.stderr)
 
 
+def _run_task_batch(args) -> int:
+    """
+    Run several tasks concurrently, each in an isolated worktree.
+
+    Kept apart from main() because the single-task path builds one AgentConfig
+    and reports one result; this one builds N and reports a table.
+    """
+    from modules.agent_loop import AgentConfig, AutonomousAgent
+    from modules.parallel_tasks import WorktreeError, render_summary, run_tasks
+
+    if not args.repo:
+        print("ERROR: --repo is required with --tasks.", file=sys.stderr)
+        return 2
+
+    repo_root = os.path.abspath(args.repo)
+
+    def run_one(task: str, worktree: str, branch: str):
+        # Each agent is pointed at its own checkout. Git is disabled inside the
+        # run because the worktree is already on the branch this task owns --
+        # letting the agent create another would nest branches per task.
+        config = AgentConfig(
+            repo_root=worktree,
+            task=task,
+            git_enabled=False,
+            yes=True,
+            max_iterations=args.max_iter,
+            test_runner=args.runner,
+            timeout_seconds=args.timeout,
+            anthropic_api_key=args.api_key,
+            model=args.model,
+            provider=args.provider,
+        )
+        return AutonomousAgent(config).run()
+
+    try:
+        outcomes = run_tasks(
+            repo_root,
+            args.tasks,
+            run_one,
+            max_workers=args.max_parallel_tasks,
+            branch_prefix=args.branch_prefix,
+            base_branch=args.base_branch,
+        )
+    except WorktreeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    print(render_summary(outcomes))
+    return 0 if all(o.ok for o in outcomes) else 1
+
+
 def main():
     args = parse_args()
+
+    if args.tasks:
+        sys.exit(_run_task_batch(args))
 
     if args.update:
         sys.exit(run_update(assume_yes=args.yes))
