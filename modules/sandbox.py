@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
+from pathlib import PurePosixPath, PureWindowsPath
 import time
 import sys
 import uuid
@@ -863,6 +864,34 @@ def _docker_user_flags() -> list[str]:
     return ["--user", f"{getuid()}:{getgid()}"]
 
 
+def _docker_mount_path(path: str) -> str:
+    """
+    A host path in the form Docker accepts for `-v`.
+
+    Docker Desktop on Windows takes forward slashes and treats a colon as the
+    separator between host path, container path and mode. `D:\\repo` therefore
+    has to become `D:/repo`, and an already-posix path is returned unchanged.
+
+    A UNC path (`\\\\server\\share`) cannot be bind-mounted at all; saying so is
+    better than emitting an argument Docker will reject with its own message.
+    """
+    if path.startswith("\\\\") or path.startswith("//"):
+        raise ValueError(
+            f"Docker cannot bind-mount a network path: {path}. "
+            f"Use a local drive, or run without Docker."
+        )
+
+    normalised = path.replace("\\", "/")
+
+    # Only relative paths need resolving. os.path.abspath uses the host
+    # flavour, so calling it on "D:/repo" from Linux would prepend the current
+    # directory and produce something meaningless.
+    if PureWindowsPath(normalised).is_absolute() or PurePosixPath(normalised).is_absolute():
+        return normalised
+
+    return os.path.abspath(normalised).replace("\\", "/")
+
+
 class DockerSandbox(Sandbox):
     """
     Docker-based sandbox for untrusted code.
@@ -934,7 +963,7 @@ class DockerSandbox(Sandbox):
         cmd += [
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
             "-e", "HOME=/tmp",
-            "-v", f"{self.working_dir}:/workspace:rw",
+            "-v", f"{_docker_mount_path(self.working_dir)}:/workspace:rw",
             "-w", "/workspace",
             self.image,
             "sh", "-c", shlex.join(inner_cmd),

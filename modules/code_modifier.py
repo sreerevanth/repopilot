@@ -9,7 +9,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -179,9 +179,23 @@ class CodeModificationEngine:
         if not relative_path or not relative_path.strip():
             raise ValueError("Path is empty")
 
-        candidate = Path(relative_path.replace("\\", "/"))
-        if candidate.is_absolute():
+        normalised = relative_path.replace("\\", "/")
+
+        # Checked against both path flavours, not just the current platform's.
+        # `Path` picks the host flavour, so "C:/Windows/evil.txt" is absolute on
+        # Windows and merely odd on Linux -- the same model output was rejected
+        # on one machine and silently created a directory named "C:" inside the
+        # repository on another. A drive letter, a UNC share and a leading slash
+        # are all refused everywhere.
+        if PureWindowsPath(normalised).is_absolute() or PurePosixPath(normalised).is_absolute():
             raise ValueError(f"Absolute paths are not allowed: '{relative_path}'")
+
+        # "C:file.txt" is drive-relative: absolute on neither flavour, but it
+        # names a location on another drive rather than in this repository.
+        if PureWindowsPath(normalised).drive:
+            raise ValueError(f"Drive-qualified paths are not allowed: '{relative_path}'")
+
+        candidate = Path(normalised)
 
         abs_path = (Path(self.repo_root) / candidate).resolve()
         repo_root = Path(self.repo_root).resolve()
