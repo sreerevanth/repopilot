@@ -177,6 +177,11 @@ def _checkpoint(agent, cfg, iteration, last_changes, exec_result) -> None:
     )
 
 
+# Coverage is reported to one decimal place and rounding moves it slightly
+# between runs. Failing a run for 0.05% would be noise, not a signal.
+COVERAGE_TOLERANCE = 0.5
+
+
 class AutonomousAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
@@ -252,6 +257,34 @@ class AutonomousAgent:
             api_base_url=cfg.api_base_url,
             )
         return self._llm
+
+    def _coverage_feedback(
+        self,
+        baseline: Optional[float],
+        current: Optional[float],
+    ) -> Optional[str]:
+        """
+        A message when coverage fell, or None when it did not.
+
+        The call site has always existed and this method never did, so a run
+        with --coverage raised AttributeError the moment a percentage parsed.
+
+        Returns None whenever the comparison cannot be made -- no baseline, or
+        no current figure. Treating an unparseable number as a drop would fail
+        runs for a reporting quirk rather than for anything the model did.
+        """
+        if baseline is None or current is None:
+            return None
+
+        if current >= baseline - COVERAGE_TOLERANCE:
+            return None
+
+        return (
+            f"Coverage fell from {baseline:.1f}% to {current:.1f}%. "
+            f"The tests pass, but they cover less of the code than before. "
+            f"Restore the deleted tests, or add tests for the new paths -- "
+            f"deleting a failing test is not fixing it."
+        )
 
     def _run_execution(self) -> ExecutionResult:
         """Run tests or the specified file in the sandbox."""
@@ -923,7 +956,7 @@ class AutonomousAgent:
 
         final_message = {
             "budget_exceeded": (
-                f"Stopped at the --max-cost limit after {self.llm.usage.summary()}. "
+                f"Stopped at the --max-cost limit after {self.llm.usage_summary()}. "
                 f"Any applied changes were rolled back."
             ),
             "success": "Task completed successfully. Tests pass.",
