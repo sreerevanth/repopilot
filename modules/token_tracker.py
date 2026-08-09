@@ -4,7 +4,6 @@ Tracks token usage and estimates costs for LLM API calls.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 # Cost per 1k tokens (input, output) in USD
 PRICING_TABLE = {
