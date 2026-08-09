@@ -187,6 +187,13 @@ Examples:
                         help="API key for the LLM provider (default: provider-specific env var)")
     parser.add_argument("--model", default=None,
                         help="LLM model name (default: provider-specific, or AGENT_MODEL env var)")
+    parser.add_argument("--fallback-provider",
+                        choices=["anthropic", "openai", "gemini", "ollama"],
+                        default=None,
+                        help="Try this provider when the primary fails with a "
+                             "transient error such as a 500 or an overload.")
+    parser.add_argument("--fallback-api-key", default=None,
+                        help="Key for the fallback provider (defaults to --api-key).")
     parser.add_argument("--provider", default="anthropic",
                         choices=["anthropic", "openai", "gemini", "ollama"],
                         help="LLM provider to use (default: anthropic)")
@@ -268,6 +275,8 @@ def _run_task_batch(args) -> int:
             anthropic_api_key=args.api_key,
             model=args.model,
             provider=args.provider,
+        fallback_provider=args.fallback_provider,
+        fallback_api_key=args.fallback_api_key,
         )
         return AutonomousAgent(config).run()
 
