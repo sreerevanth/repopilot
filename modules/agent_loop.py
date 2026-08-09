@@ -14,6 +14,7 @@ Flow per iteration:
 """
 
 import os
+import sys
 import time
 import re
 import uuid
@@ -65,7 +66,8 @@ class AgentConfig:
     dry_run: bool = False
     context_only: bool = False             # print the compiled context and stop
     yes: bool = False
-    interactive: bool = False   # pause for review after tests pass, before commit
+    interactive: bool = False
+    step: bool = False                     # pause between iterations to inspect
 
     # Execution
     skip_tests: bool = False               # accept the LLM's own verdict instead
@@ -309,6 +311,58 @@ class AutonomousAgent:
 
     # Cap the review diff so a large refactor cannot flood the terminal.
     _MAX_DIFF_LINES = 400
+
+    def _pause_after_iteration(self, iteration: int, exec_result) -> bool:
+        """
+        Stop between iterations so the tree can be inspected. Returns False to
+        end the run.
+
+        Placed at the iteration boundary rather than wherever a key is pressed.
+        Mid-iteration there is nothing coherent to look at -- the agent is
+        inside an API call or a test run, and the working tree is either
+        untouched or half-written. At the boundary the changes are applied, the
+        tests have reported, and `git diff` says something true.
+
+        Requires a terminal. `--step` with output piped, or under CI, would
+        block forever on a prompt nobody can answer, so it degrades to a
+        warning and the run continues.
+        """
+        cfg = self.config
+        if not cfg.step or cfg.yes:
+            return True
+
+        if not sys.stdin.isatty():
+            if iteration == 1:
+                self.logger.warning(
+                    "  --step needs a terminal and stdin is not one; continuing "
+                    "without pausing."
+                )
+            return True
+
+        status = (
+            "passed" if exec_result and exec_result.success else "did not pass"
+        )
+        print("\n" + "=" * 60)
+        print(f"  PAUSED after iteration {iteration} - tests {status}")
+        print("=" * 60)
+        print("  The working tree holds this iteration's changes. Inspect it in")
+        print("  another shell -- `git diff`, run something, read the log -- then:")
+        print()
+        print("    [Enter]  continue to the next iteration")
+        print("    s        stop here and finish the run")
+        print()
+
+        try:
+            answer = input("  > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            # Ctrl+D or Ctrl+C at the prompt means stop, not continue.
+            print()
+            return False
+
+        if answer in ("s", "stop", "q", "quit"):
+            self.logger.info(f"  Stopped at iteration {iteration} by request.")
+            return False
+        return True
 
     def _confirm_commit(self, changed_paths: list[str]) -> bool:
         """
@@ -941,6 +995,14 @@ class AutonomousAgent:
                 self.logger.warning(f"  Max iterations ({cfg.max_iterations}) reached.")
                 outcome = "max_retries"
 
+            # Every path that reaches here has finished an iteration: the
+            # changes are applied and the tests have reported. Placed after the
+            # "feeding back" message so the pause reads as a boundary rather
+            # than an interruption of it.
+            if not self._pause_after_iteration(iteration, last_exec):
+                outcome = "stopped"
+                break
+
         # ── Post-loop: Git push + PR ──
         if outcome == "success" and self.git and self.branch_name:
             if cfg.git_push:
@@ -985,6 +1047,11 @@ class AutonomousAgent:
             "success": "Task completed successfully. Tests pass.",
             "failed": "Task could not be completed. Check logs.",
             "max_retries": f"Exhausted {cfg.max_iterations} iterations without passing tests.",
+            "stopped": (
+                "Stopped at your request between iterations. The changes from "
+                "the last iteration are still in the working tree -- commit "
+                "them, or run with --rollback to discard them."
+            ),
             "error": "Agent encountered an unrecoverable error.",
             "aborted": (
                 "Commit declined at the review prompt. Tests passed and the "
