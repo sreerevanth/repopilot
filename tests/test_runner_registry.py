@@ -118,8 +118,12 @@ def test_no_runner_was_lost(name):
     assert name in ALLOWED_RUNNERS
 
 
-def test_the_count_is_unchanged():
-    assert len(ALLOWED_RUNNERS) == 12
+def test_the_count_matches_the_registry():
+    """
+    Pinned so a runner cannot be dropped unnoticed. Raised from 12 to 14 when
+    tox and nox were added for #153.
+    """
+    assert len(ALLOWED_RUNNERS) == len(RUNNERS) == 14
 
 
 # ── what the registry makes possible ──────────────────────────────────────
@@ -127,7 +131,7 @@ def test_the_count_is_unchanged():
 
 def test_runners_can_be_listed_by_language():
     """Not answerable from the old tables, which had no notion of a language."""
-    assert runners_for_language("python") == ["pytest", "python"]
+    assert runners_for_language("python") == ["nox", "pytest", "python", "tox"]
     assert runners_for_language("javascript") == ["jest", "node", "npm_test", "vitest"]
 
 
