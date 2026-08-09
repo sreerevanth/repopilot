@@ -156,6 +156,11 @@ Examples:
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
 
     # API key
+    parser.add_argument("--system-prompt", dest="system_prompt_file", default=None,
+                        metavar="PATH",
+                        help="Replace the default system prompt with the contents of "
+                             "a file. The JSON output contract must be preserved or "
+                             "responses will not parse.")
     parser.add_argument("--api-key", default=None,
                         help="API key for the LLM provider (default: provider-specific env var)")
     parser.add_argument("--model", default=None,
@@ -358,6 +363,7 @@ def main():
         # LLM
         anthropic_api_key=args.api_key,
         max_cost=args.max_cost,
+        system_prompt_file=args.system_prompt_file,
         api_base_url=args.api_base_url,
         verbose_payloads=args.verbose_payloads,
         quiet=args.quiet,

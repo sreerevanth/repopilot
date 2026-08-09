@@ -336,6 +336,41 @@ def _dump_payload(label: str, body: str, redact: bool = True) -> None:
     print(rule, file=sys.stderr, flush=True)
 
 
+REQUIRED_SCHEMA_KEYS = ("analysis", "changes", "confidence", "done")
+
+
+class SystemPromptError(ValueError):
+    """Raised when a --system-prompt file cannot be used."""
+
+
+def load_system_prompt(path: str) -> str:
+    """
+    Read a replacement system prompt from disk.
+
+    Warns rather than refuses when the schema keys are missing: the flag exists
+    to let people experiment with the persona, and a hard rejection would block
+    a legitimate rewrite that phrases the contract differently. The warning is
+    there because the failure it predicts is otherwise baffling -- every
+    iteration fails to parse and nothing says why.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemPromptError(f"Could not read system prompt {path}: {exc}") from exc
+
+    if not text.strip():
+        raise SystemPromptError(f"System prompt {path} is empty.")
+
+    missing = [k for k in REQUIRED_SCHEMA_KEYS if k not in text]
+    if missing:
+        _LOG.warning(
+            "Custom system prompt does not mention %s. The parser expects a JSON "
+            "object with these keys; without them every iteration will fail to "
+            "parse.", ", ".join(missing),
+        )
+    return text
+
+
 class BudgetExceededError(RuntimeError):
     """
     Raised when accumulated spend reaches the configured --max-cost.
@@ -370,10 +405,14 @@ class BaseLLMClient:
         model: str = MODEL,
         verbose: bool = False,
         max_cost: Optional[float] = None,
+        system_prompt: Optional[str] = None,
     ):
         self.model = model
         self.verbose = verbose
         self.max_cost = max_cost
+        # Per-instance so a run can override it; falls back to the module
+        # constant, which is itself loaded from prompts/system.txt.
+        self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.input_tokens_used = 0
         self.output_tokens_used = 0
         self.total_cost = 0.0
@@ -414,9 +453,9 @@ class BaseLLMClient:
         request type reintroducing that.
         """
         self._check_budget()
-        input_tok = self._estimate_tokens(prompt + SYSTEM_PROMPT)
+        input_tok = self._estimate_tokens(prompt + self.system_prompt)
         if self.verbose:
-            _dump_payload("system prompt", SYSTEM_PROMPT)
+            _dump_payload("system prompt", self.system_prompt)
             _dump_payload("request", prompt)
 
         raw = self._call(prompt)
@@ -587,7 +626,7 @@ class AnthropicClient(BaseLLMClient):
             with self.client.messages.stream(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=self.system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 for text in stream.text_stream:
@@ -600,7 +639,7 @@ class AnthropicClient(BaseLLMClient):
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=self.system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
             print(response.content[0].text)
@@ -626,7 +665,7 @@ class OpenAIClient(BaseLLMClient):
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": MAX_TOKENS,
@@ -667,7 +706,7 @@ class GeminiClient(BaseLLMClient):
             "contents": [
                 {
                     "parts": [
-                        {"text": SYSTEM_PROMPT + "\n\n" + prompt}
+                        {"text": self.system_prompt + "\n\n" + prompt}
                     ]
                 }
             ],
@@ -711,7 +750,7 @@ class OllamaClient(BaseLLMClient):
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt}
             ],
             "options": {
@@ -743,8 +782,9 @@ class LLMClient(BaseLLMClient):
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL,
                  provider: str = "anthropic", verbose: bool = False,
                  max_cost: Optional[float] = None,
-                 api_base_url: Optional[str] = None):
-        super().__init__(model, verbose, max_cost)
+                 api_base_url: Optional[str] = None,
+                 system_prompt: Optional[str] = None):
+        super().__init__(model, verbose, max_cost, system_prompt)
         self.provider = provider.lower()
         if self.provider == "openai":
             self.underlying_client = OpenAIClient(api_key, model)
@@ -759,6 +799,7 @@ class LLMClient(BaseLLMClient):
         # to whichever provider was chosen, and one line cannot drift.
         self.underlying_client.verbose = verbose
         self.underlying_client.max_cost = max_cost
+        self.underlying_client.system_prompt = self.system_prompt
 
     def _call(self, prompt: str) -> str:
         return self.underlying_client._call(prompt)

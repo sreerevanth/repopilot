@@ -24,6 +24,7 @@ from typing import Optional
 from modules.repo_ingestion import ingest_repository, ingest_repository_parallel, Repository
 from modules.context_builder import build_context, budget_for_model
 from modules.llm_client import (
+    load_system_prompt,
     BudgetExceededError,
     FileChange,
     LLMClient,
@@ -108,7 +109,8 @@ class AgentConfig:
     api_base_url: Optional[str] = None     # override the provider endpoint
     resume_from: Optional[str] = None      # run_id to continue
     quiet: bool = False                    # suppress debug-level output
-    verbose_payloads: bool = False         # dump raw LLM request/response
+    verbose_payloads: bool = False
+    system_prompt_file: Optional[str] = None   # replace the default persona         # dump raw LLM request/response
     model: Optional[str] = None
     context_budget: Optional[int] = None   # chars; derived from the model if unset
     provider: str = "anthropic"
@@ -249,6 +251,10 @@ class AutonomousAgent:
                 provider=cfg.provider,
                 verbose=cfg.verbose_payloads,
             max_cost=cfg.max_cost,
+            system_prompt=(
+                load_system_prompt(cfg.system_prompt_file)
+                if cfg.system_prompt_file else None
+            ),
             api_base_url=cfg.api_base_url,
             )
         return self._llm
