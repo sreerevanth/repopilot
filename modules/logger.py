@@ -66,6 +66,28 @@ class RunRecord:
     final_error: Optional[str] = None
 
 
+class _ReadableFormatter(logging.Formatter):
+    """
+    Timestamps ordinary lines, leaves structural ones bare.
+
+    A separator rendered through the standard formatter comes out as
+
+        2026-04-19 18:31:48 [INFO] ------------------------------------
+
+    which is indented by thirty characters of metadata and no longer separates
+    anything. Headers and rules are emitted without the prefix so the eye can
+    find them, and everything else keeps its timestamp and level.
+    """
+
+    def __init__(self, datefmt: str):
+        super().__init__("%(asctime)s [%(levelname)s] %(message)s", datefmt=datefmt)
+
+    def format(self, record: logging.LogRecord) -> str:
+        if getattr(record, "bare", False):
+            return record.getMessage()
+        return super().format(record)
+
+
 class AgentLogger:
     def __init__(self, log_dir: str, run_id: str, verbose: bool = True):
         self.log_dir = os.path.abspath(log_dir)
@@ -84,18 +106,12 @@ class AgentLogger:
 
         console_handler = logging.StreamHandler(_configure_text_stream(sys.stdout))
         console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
-        console_handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%H:%M:%S",
-        ))
+        console_handler.setFormatter(_ReadableFormatter(datefmt="%H:%M:%S"))
         self._logger.addHandler(console_handler)
 
         file_handler = logging.FileHandler(self.human_log_path, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        ))
+        file_handler.setFormatter(_ReadableFormatter(datefmt="%H:%M:%S"))
         self._logger.addHandler(file_handler)
 
         self._run_record: Optional[RunRecord] = None
@@ -118,9 +134,20 @@ class AgentLogger:
         self._logger.info(f"  Task: {task[:120]}")
         self._logger.info(f"  Repo: {repo_root}")
 
+    def section(self, title: str, rule: str = "-") -> None:
+        """A header with no timestamp prefix, so it reads as a boundary."""
+        self._logger.info("", extra={"bare": True})
+        self._logger.info(rule * 60, extra={"bare": True})
+        self._logger.info(title, extra={"bare": True})
+        self._logger.info(rule * 60, extra={"bare": True})
+
     def start_iteration(self, iteration: int):
-        self._logger.info("\n" + "-" * 60)
-        self._logger.info(f"Iteration {iteration}")
+        # The date moved here from every line: a run happens on one day, and
+        # repeating it 200 times pushed the actual message off to the right.
+        self.section(
+            f"Iteration {iteration}"
+            f"  ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+        )
 
     def log_context(self, files: list[str], total_chars: int):
         self._logger.debug(f"  Context: {len(files)} files, {total_chars} chars")
