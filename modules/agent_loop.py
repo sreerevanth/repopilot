@@ -72,10 +72,8 @@ class AgentConfig:
     # Execution
     skip_tests: bool = False               # accept the LLM's own verdict instead
     plan_first: bool = False               # ask for an approach before coding
-    plan_first: bool = False               # ask for an approach before coding
     test_runner: str = "pytest"            # pytest | npm_test | go | cargo | ...
     test_args: Optional[list] = None       # extra args to pass to runner
-    skip_tests: bool = False               # accept the LLM's own verdict instead
     run_file: Optional[str] = None         # run a specific file instead of tests
     run_file_runner: str = "python"
     coverage: bool = False                 # measure coverage and feed drops back
@@ -97,7 +95,6 @@ class AgentConfig:
     git_commit_author: str = "RepoPilot Agent <agent@repopilot.local>"
 
     # CLI behavior
-    yes: bool = False
     no_commit: bool = False                # stage changes but leave them uncommitted
     git_push: bool = False                  # push to remote?
     git_create_pr: bool = False
@@ -112,7 +109,6 @@ class AgentConfig:
     max_cost: Optional[float] = None       # stop before the next call at this spend
     resume_from: Optional[str] = None      # run_id to continue
     api_base_url: Optional[str] = None     # override the provider endpoint
-    resume_from: Optional[str] = None      # run_id to continue
     quiet: bool = False                    # suppress debug-level output
     verbose_payloads: bool = False
     system_prompt_file: Optional[str] = None   # replace the default persona         # dump raw LLM request/response

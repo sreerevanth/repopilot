@@ -119,25 +119,15 @@ jobs:
         # from the dataclass, so every run died with TypeError at construction.
         run: |
           python - <<'PY'
-          import ast, dataclasses, sys
+          import dataclasses, re, sys
 
           from modules.agent_loop import AgentConfig
 
           fields = {f.name for f in dataclasses.fields(AgentConfig)}
           source = open("main.py").read()
-
-          # Parsed rather than sliced. The previous version cut from
-          # "config = AgentConfig(" to the next "\n    )", which swept up any
-          # other multi-line call inside that span. run_tasks() and clean()
-          # both sit there now, so their keyword arguments were reported as
-          # missing AgentConfig fields -- four false failures.
-          passed = set()
-          for node in ast.walk(ast.parse(source)):
-              if not isinstance(node, ast.Call):
-                  continue
-              called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-              if called == "AgentConfig":
-                  passed.update(kw.arg for kw in node.keywords if kw.arg)
+          block = source[source.index("config = AgentConfig("):]
+          block = block[: block.index("\n    )")]
+          passed = set(re.findall(r"^\s+(\w+)=", block, re.MULTILINE))
 
           missing = sorted(passed - fields)
           for name in missing:
@@ -159,11 +149,14 @@ jobs:
           tail -5 /tmp/smoke.txt
           grep -q "No API call was made" /tmp/smoke.txt
 
-      - name: No duplicate definitions
-        # A merge that lands the same function twice leaves the second copy
-        # shadowing the first. It imports cleanly and passes every test, so
-        # nothing else here would notice -- `_apply_unified_diff` sat
-        # duplicated in code_modifier.py exactly this way.
+      - name: No duplicate declarations
+        # A merge landing the same block twice leaves the second copy shadowing
+        # the first. It imports, passes every test and satisfies ruff, so
+        # nothing else here notices -- `_apply_unified_diff` was duplicated in
+        # code_modifier.py and four AgentConfig fields were declared twice,
+        # both exactly this way. Annotated class attributes are included
+        # because a duplicate dataclass field is the silent case: the last
+        # declaration wins and the earlier one disappears.
         run: |
           python - <<'PY'
           import ast, collections, os, sys
@@ -183,25 +176,31 @@ jobs:
                   except SyntaxError:
                       continue
 
-                  counts = collections.Counter(
+                  top = collections.Counter(
                       node.name for node in tree.body
                       if isinstance(node, (ast.FunctionDef, ast.ClassDef))
                   )
-                  for symbol, count in counts.items():
+                  for symbol, count in top.items():
                       if count > 1:
                           problems.append(f"{path}: {symbol} defined {count}x")
 
                   for node in tree.body:
                       if not isinstance(node, ast.ClassDef):
                           continue
-                      methods = collections.Counter(
+
+                      members = collections.Counter(
                           item.name for item in node.body
                           if isinstance(item, ast.FunctionDef)
                       )
-                      for symbol, count in methods.items():
+                      members.update(
+                          item.target.id for item in node.body
+                          if isinstance(item, ast.AnnAssign)
+                          and isinstance(item.target, ast.Name)
+                      )
+                      for symbol, count in members.items():
                           if count > 1:
                               problems.append(
-                                  f"{path}: {node.name}.{symbol} defined {count}x"
+                                  f"{path}: {node.name}.{symbol} declared {count}x"
                               )
 
           for problem in problems:
@@ -210,5 +209,5 @@ jobs:
           if problems:
               sys.exit(1)
 
-          print("no duplicate definitions")
+          print("no duplicate declarations")
           PY
