@@ -91,6 +91,27 @@ class ExecutionResult:
 # vitest is invoked as `vitest run` on purpose. Bare `vitest` starts a watch
 # server when it thinks it is interactive; under this sandbox it would hold the
 # process open until timeout_seconds elapsed and be reported as a test timeout.
+# Multi-version testing works on the host, where pyenv or a system install
+# provides several interpreters. Inside the default container it does not: the
+# image ships one Python, so tox skips every environment it cannot find an
+# interpreter for and reports success having tested one version.
+#
+# Pass a multi-version image to test several inside a container, for example
+# one of the `fkrull/multi-python` tags:
+#
+#     DockerSandbox(repo, image="fkrull/multi-python:latest").run_tests("tox")
+#
+# Stated here rather than silently accepted, because "tests passed" from a run
+# that tested one version out of three is the wrong kind of green.
+MULTI_VERSION_RUNNERS = frozenset({"tox", "nox"})
+
+MULTI_VERSION_IMAGE_NOTE = (
+    "tox/nox in a container test only the interpreters present in the image. "
+    "The default python:3.11-slim ships one; pass a multi-python image to test "
+    "several."
+)
+
+
 @dataclass(frozen=True)
 class LanguageRunner:
     """
@@ -140,6 +161,15 @@ RUNNERS: dict = {
                        linters=("eslint", "tsc")),
         LanguageRunner("jest", "javascript", ["npx", "--no-install", "jest"],
                        linters=("eslint", "tsc")),
+        # tox and nox each manage their own interpreters and virtualenvs, so the
+        # sandbox invokes them and stays out of the way. Both need to find the
+        # interpreters they are configured for: `python:3.11-slim` contains one,
+        # so a container run tests only 3.11 however many envlist entries there
+        # are. See MULTI_VERSION_IMAGE_NOTE.
+        LanguageRunner("tox", "python", ["tox"], module=None,
+                       linters=("ruff", "flake8", "pyflakes")),
+        LanguageRunner("nox", "python", ["nox"], module=None,
+                       linters=("ruff", "flake8", "pyflakes")),
         LanguageRunner("bash", "bash", ["bash"]),
         LanguageRunner("make", "make", ["make"]),
         LanguageRunner("go", "go", ["go", "test", "./..."], linters=("govet",)),
@@ -1006,6 +1036,13 @@ class DockerSandbox(Sandbox):
         """
         if not self._docker_available and not self.strict:
             return super().run_tests(runner, extra_args)
+
+        if runner in MULTI_VERSION_RUNNERS:
+            # Warned rather than refused: testing one version is still worth
+            # something, and the image may well be a multi-python one. Silence
+            # is the problem -- "tests passed" after testing one of three
+            # versions reads as a stronger result than it is.
+            _LOG.warning("%s (image: %s)", MULTI_VERSION_IMAGE_NOTE, self.image)
 
         runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
         return self.run(runner_cmd + (extra_args or []))
