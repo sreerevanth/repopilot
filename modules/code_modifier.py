@@ -338,6 +338,8 @@ class CodeModificationEngine:
         """
         restored = []
         removed: list[str] = []
+        # Paths this rollback could not revert, reported at the end.
+        failed: list[str] = []
         for result in results:
             # A rename left a file at the destination. Restoring the backup to
             # the original path is not enough on its own -- without this the
@@ -347,8 +349,17 @@ class CodeModificationEngine:
                     dest_abs = self._safe_abs_path(result.new_path)
                     if os.path.exists(dest_abs):
                         os.remove(dest_abs)
-                except Exception:
-                    pass
+                except (OSError, ValueError) as exc:
+                    # Logged rather than swallowed. A rollback that half
+                    # completes and reports success is worse than one that
+                    # fails: the user is told the changes were undone, so they
+                    # do not check, and the leftover file surfaces later with
+                    # nothing linking it back to the run.
+                    _LOG.warning(
+                        "rollback could not remove renamed file %s: %s",
+                        result.new_path, exc,
+                    )
+                    failed.append(result.new_path)
 
             # A successful "create" has no backup -- _backup returns None when
             # the file did not exist -- so restoring backups alone leaves the
@@ -372,8 +383,27 @@ class CodeModificationEngine:
                     abs_path = self._safe_abs_path(result.path)
                     shutil.copy2(result.backup_path, abs_path)
                     restored.append(result.path)
-                except Exception:
-                    pass
+                except (OSError, ValueError) as exc:
+                    # The more serious of the two: a failed restore leaves the
+                    # file in the state the agent left it, while the count
+                    # returned below reports the rollback as complete.
+                    _LOG.warning(
+                        "rollback could not restore %s from %s: %s",
+                        result.path, result.backup_path, exc,
+                    )
+                    failed.append(result.path)
+        # A rollback that could not finish says so. Without this the caller
+        # reports a count of reverted paths and nothing about the ones it could
+        # not touch, so a partial rollback is indistinguishable from a complete
+        # one at exactly the moment that distinction matters.
+        if failed:
+            _LOG.error(
+                "Rollback incomplete: %d file(s) could not be reverted -- %s. "
+                "The working tree is neither the original nor the agent's "
+                "result; check these paths by hand.",
+                len(failed), ", ".join(sorted(failed)),
+            )
+
         # Removed creations are reverted paths too. Callers report this count
         # to the user, and omitting them would understate what was undone.
         return restored + removed
