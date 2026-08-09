@@ -18,7 +18,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from modules.sandbox import DockerSandbox, _docker_user_flags  # noqa: E402
+from modules.sandbox import (  # noqa: E402
+    DockerSandbox,
+    _docker_mount_path,
+    _docker_user_flags,
+)
 
 
 @pytest.fixture
@@ -137,7 +141,11 @@ def test_existing_isolation_flags_are_preserved(cmd):
 
 def test_workspace_stays_writable(cmd, tmp_path):
     """Made rw in #8 so tests can create fixtures; that is not reverted here."""
-    assert f"{os.path.abspath(str(tmp_path))}:/workspace:rw" in cmd
+    # Compared against the converted form: Docker takes forward slashes, and on
+    # Windows a raw path would carry backslashes and a drive colon that Docker
+    # reads as its own separator. This assertion previously encoded the bug and
+    # passed on Linux only because abspath already matched there.
+    assert f"{_docker_mount_path(str(tmp_path))}:/workspace:rw" in cmd
     assert _flag_value(cmd, "-w") == "/workspace"
 
 
