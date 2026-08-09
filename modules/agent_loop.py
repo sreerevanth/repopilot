@@ -50,6 +50,7 @@ from modules.run_state import (
 )
 from modules.project_rules import load_project_rules, render_project_rules
 from modules.change_summary import render_change_summary, summarise_changes
+from modules.response_cache import ResponseCache
 from modules.logger import AgentLogger, IterationRecord
 from modules.secret_scanner import scan_directory, format_findings
 from modules.token_tracker import TokenTracker
@@ -109,7 +110,8 @@ class AgentConfig:
 
     # LLM
     anthropic_api_key: Optional[str] = None
-    max_cost: Optional[float] = None       # stop before the next call at this spend
+    max_cost: Optional[float] = None
+    use_cache: bool = False                # reuse identical responses from disk       # stop before the next call at this spend
     resume_from: Optional[str] = None      # run_id to continue
     api_base_url: Optional[str] = None     # override the provider endpoint
     resume_from: Optional[str] = None      # run_id to continue
@@ -261,6 +263,10 @@ class AutonomousAgent:
                 provider=cfg.provider,
                 verbose=cfg.verbose_payloads,
             max_cost=cfg.max_cost,
+            cache=(
+                ResponseCache(cfg.repo_root, enabled=True)
+                if cfg.use_cache else None
+            ),
             system_prompt=(
                 load_system_prompt(cfg.system_prompt_file)
                 if cfg.system_prompt_file else None

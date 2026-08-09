@@ -198,6 +198,11 @@ Examples:
                         help="Path to configuration JSON file (default: .repopilot.json in repo root)")
 
     # Non-interactive / CI
+    parser.add_argument("--cache", dest="use_cache", action="store_true",
+                        help="Reuse a stored response when the model, system "
+                             "prompt and full prompt are identical. Off by "
+                             "default: requests are not deterministic, so this "
+                             "changes behaviour as well as saving money.")
     parser.add_argument("--max-cost", type=float, default=None, metavar="USD",
                         help="Stop before the next LLM call once this much has been "
                              "spent (e.g. --max-cost 1.00). Off by default.")
@@ -460,6 +465,7 @@ def main():
         # LLM
         anthropic_api_key=args.api_key,
         max_cost=args.max_cost,
+        use_cache=args.use_cache,
         system_prompt_file=args.system_prompt_file,
         api_base_url=args.api_base_url,
         verbose_payloads=args.verbose_payloads,
