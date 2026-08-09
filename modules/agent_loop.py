@@ -508,6 +508,31 @@ class AutonomousAgent:
             ),
         )
 
+    def _baseline_coverage(self) -> Optional[float]:
+        """
+        Coverage before the model touches anything, or None.
+
+        Measured up front so a first-iteration regression is still caught.
+        Extracted from `_run` because it is genuinely self-contained: it
+        reads the config, runs the suite once and returns one number.
+        """
+        cfg = self.config
+        if not cfg.coverage:
+            return None
+
+        baseline_run = self._run_execution()
+        baseline = parse_coverage_percent(
+            baseline_run.stdout + baseline_run.stderr
+        )
+        if baseline is None:
+            self.logger.warning(
+                "  --coverage is on but no coverage total was found. Is "
+                "pytest-cov installed? Continuing without the gate."
+            )
+        else:
+            self.logger.info(f"  Baseline coverage: {baseline:.1f}%")
+        return baseline
+
     def _run(self) -> AgentRunResult:
         cfg = self.config
         self.logger.start_run(cfg.task, cfg.repo_root)
@@ -557,22 +582,7 @@ class AutonomousAgent:
         self.pr_url = None
         iterations_used = 0
 
-        baseline_coverage: Optional[float] = None
-        if cfg.coverage:
-            # Measured before the model touches anything, so a first-iteration
-            # regression is still caught.
-            baseline_run = self._run_execution()
-            baseline_coverage = parse_coverage_percent(
-                baseline_run.stdout + baseline_run.stderr
-            )
-            if baseline_coverage is None:
-                self.logger.warning(
-                    "  --coverage is on but no coverage total was found. Is "
-                    "pytest-cov installed? Continuing without the gate."
-                )
-            else:
-                self.logger.info(f"  Baseline coverage: {baseline_coverage:.1f}%")
-
+        baseline_coverage = self._baseline_coverage()
         for iteration in range(start_iteration, cfg.max_iterations + 1):
             iterations_used = iteration
             self.logger.start_iteration(iteration)
@@ -1010,6 +1020,25 @@ class AutonomousAgent:
                 outcome = "stopped"
                 break
 
+        return self._finalize(
+            outcome, iterations_used, last_apply_results, all_apply_results
+        )
+
+    def _finalize(
+        self,
+        outcome: str,
+        iterations_used: int,
+        last_apply_results: list,
+        all_apply_results: list,
+    ) -> AgentRunResult:
+        """
+        Everything after the loop: push, open a PR, roll back, report.
+
+        Separable because it needs four values and nothing else from the
+        loop's locals. The iteration body is not, and is left alone.
+        """
+        cfg = self.config
+
         # ── Post-loop: Git push + PR ──
         if outcome == "success" and self.git and self.branch_name:
             if cfg.git_push:
@@ -1106,3 +1135,4 @@ class AutonomousAgent:
             iterations_used=iterations_used,
             final_message=final_message,
         )
+
