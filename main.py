@@ -56,7 +56,7 @@ Examples:
                         help="Run several tasks concurrently, each in its own git "
                              "worktree on its own branch. Implies isolation, so "
                              "tasks may touch the same files.")
-    parser.add_argument("--max-parallel-tasks", type=int, default=4, metavar="N",
+    parser.add_argument("--max-parallel-tasks", type=positive_int, default=4, metavar="N",
                         help="How many tasks to run at once (default: 4)")
 
     # Execution
@@ -91,20 +91,20 @@ Examples:
                              "to the model.")
     parser.add_argument("--lint-args", nargs="*", default=[],
                         help="Extra arguments for --lint")
-    parser.add_argument("--timeout", type=int, default=120,
+    parser.add_argument("--timeout", type=positive_int, default=120,
                         help="Execution timeout in seconds (default: 120)")
 
     # Loop control
     parser.add_argument("--plan-first", action="store_true",
                         help="Ask the model for an approach before it writes code. "
                              "Costs one extra API call on the first iteration.")
-    parser.add_argument("--max-iter", type=int, default=5,
+    parser.add_argument("--max-iter", type=positive_int, default=5,
                         help="Maximum number of agent iterations (default: 5)")
 
     # Parallel Processing
     parser.add_argument("--parallel", action="store_true",
                         help="Enable parallel file processing (ingestion and modification)")
-    parser.add_argument("--workers", type=int, default=10,
+    parser.add_argument("--workers", type=positive_int, default=10,
                         help="Number of worker threads for parallel processing (default: 10)")
 
     # Git
@@ -128,7 +128,7 @@ Examples:
                         help="Prefix for the auto-created branch name (default: agent)")
 
     # Context
-    parser.add_argument("--context-budget", type=int, default=None, metavar="CHARS",
+    parser.add_argument("--context-budget", type=positive_int, default=None, metavar="CHARS",
                         help="Characters of repository context to send. Derived "
                              "from the model's context window when not set.")
     parser.add_argument("--project-rules", dest="project_rules_file",
@@ -173,7 +173,7 @@ Examples:
     parser.add_argument("--clean", action="store_true",
                         help="Remove this tool's old logs and backups, then exit. "
                              "Only files it created are touched.")
-    parser.add_argument("--clean-older-than", type=float, default=None,
+    parser.add_argument("--clean-older-than", type=non_negative_float, default=None,
                         metavar="DAYS",
                         help="With --clean, keep anything newer than this.")
     parser.add_argument("--rollback",action="store_true",help="Undo the last agent run by popping the git stash.")
@@ -212,7 +212,7 @@ Examples:
                              "prompt and full prompt are identical. Off by "
                              "default: requests are not deterministic, so this "
                              "changes behaviour as well as saving money.")
-    parser.add_argument("--max-cost", type=float, default=None, metavar="USD",
+    parser.add_argument("--max-cost", type=positive_float, default=None, metavar="USD",
                         help="Stop before the next LLM call once this much has been "
                              "spent (e.g. --max-cost 1.00). Off by default.")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -323,6 +323,58 @@ def _report_expected_error(error) -> None:
     sys.exit(1)
 
 
+def positive_int(text: str) -> int:
+    """
+    An integer of 1 or more.
+
+    Used on flags where zero or negative is not a weaker setting but a broken
+    one. `--workers 0` previously reached ThreadPoolExecutor and surfaced as an
+    unhandled `ValueError: max_workers must be greater than 0` from inside
+    concurrent.futures, naming a parameter the user never typed.
+
+    Raising from `type=` rather than checking after parsing is deliberate:
+    argparse prints the flag name alongside the message, which is exactly the
+    information those failures were missing.
+
+    These also apply to values coming from a config file, since #291 coerces
+    each one through its flag's declared type -- so a negative in a config is
+    now reported the same way as a negative on the command line.
+    """
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or greater, got {value}")
+    return value
+
+
+def positive_float(text: str) -> float:
+    """
+    A float greater than zero.
+
+    `--max-cost -1` previously stopped the run before its first request, with
+    "Spent $0.0000, which reaches the --max-cost limit of $-1.00" -- a message
+    about budgets, for what is an invalid argument. Zero is refused for the
+    same reason: a limit of nothing is not a limit, it is a run that cannot
+    start.
+    """
+    value = float(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
+    return value
+
+
+def non_negative_float(text: str) -> float:
+    """
+    A float of zero or more.
+
+    Zero is meaningful here -- `--clean-older-than 0` is a reasonable way to
+    say "everything" -- so only negatives are refused.
+    """
+    value = float(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or greater, got {value}")
+    return value
+
+
 def apply_config_file(
     path: str,
     args: argparse.Namespace,
@@ -401,7 +453,12 @@ def apply_config_file(
         if action.type is not None and value is not None:
             try:
                 value = action.type(value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, argparse.ArgumentTypeError):
+                # ArgumentTypeError is included deliberately: the validators
+                # added for #280 raise it rather than ValueError, and it
+                # inherits from Exception rather than from either of the other
+                # two. Without it a negative in a config file escaped as a
+                # traceback instead of the warning every other bad value gets.
                 print(
                     f"Warning: config file key '{key}' should be "
                     f"{getattr(action.type, '__name__', action.type)}, "
