@@ -38,6 +38,10 @@ def docker_calls(monkeypatch):
         return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    # which() alone is not enough: _docker_is_usable also probes the daemon with
+    # `docker version`. Without this the sandbox decides Docker is unavailable
+    # and falls back to a host command, so no container flags appear.
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
     monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
     return calls
 
@@ -45,6 +49,7 @@ def docker_calls(monkeypatch):
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
     sb = DockerSandbox(str(tmp_path), timeout_seconds=5)
     yield sb
     sandbox_mod._ACTIVE_CONTAINERS.clear()
@@ -217,6 +222,7 @@ def test_cleanup_is_idempotent(sandbox, docker_calls):
 def test_removal_tolerates_a_container_that_is_already_gone(monkeypatch):
     """`--rm` racing ahead of us is the normal case, not an error."""
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
 
     def fake_run(argv, *a, **k):
         return subprocess.CompletedProcess(
@@ -232,6 +238,7 @@ def test_removal_tolerates_a_container_that_is_already_gone(monkeypatch):
 )
 def test_removal_survives_a_broken_or_hanging_cli(monkeypatch, exc):
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
 
     def fake_run(*a, **k):
         raise exc
@@ -259,6 +266,7 @@ def test_sweep_filters_on_the_project_label(monkeypatch):
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
     monkeypatch.setattr(sandbox_mod.subprocess, "run", fake_run)
 
     removed = DockerSandbox.sweep_orphaned_containers()
@@ -299,6 +307,7 @@ def test_atexit_hook_clears_the_registry(docker_calls):
 def test_atexit_hook_never_raises(monkeypatch):
     """It runs during interpreter shutdown, where an exception is unhelpful."""
     monkeypatch.setattr(sandbox_mod.shutil, "which", lambda exe: "/usr/bin/docker")
+    monkeypatch.setattr(sandbox_mod, "_docker_is_usable", lambda *a, **k: True)
 
     def explode(*a, **k):
         raise RuntimeError("interpreter is going away")

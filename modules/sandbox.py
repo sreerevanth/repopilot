@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from abc import ABC, abstractmethod
 import time
 import sys
 import uuid
@@ -473,90 +474,33 @@ def _register_atexit_once() -> None:
         _ATEXIT_REGISTERED = True
 
 
-class SubprocessSandbox:
+class Sandbox(ABC):
     """
-    Subprocess-based sandbox (no Docker required).
-    Suitable for trusted local repos. For untrusted code, use DockerSandbox.
+    What every execution backend must provide.
+
+    `SubprocessSandbox` and `DockerSandbox` were unrelated classes that happened
+    to share some method names, and they had already drifted: `DockerSandbox`
+    was missing `run`, `run_file`, `run_lint` and `run_pre_commit` entirely, so
+    `--lint`, `--run-file` or a repository's pre-commit hooks raised
+    AttributeError against it rather than doing anything. Nothing detected that,
+    because nothing required the two to agree.
+
+    Subclasses implement `run`. Everything else is expressed in terms of it, so
+    a new backend -- Firecracker, a remote executor -- gets the whole surface by
+    implementing one method, and one that forgets it cannot be instantiated.
     """
 
-    def __init__(
-        self,
-        working_dir: str,
-        timeout_seconds: int = 60,
-        max_output_bytes: int = 1024 * 1024,
-    ):
-        self.working_dir = os.path.abspath(working_dir)
-        self.timeout = timeout_seconds
-        self.max_output_bytes = max_output_bytes
+    working_dir: str
+    timeout: int
 
+    @abstractmethod
     def run(
         self,
         command: list[str],
         env: Optional[dict] = None,
         stdin_data: Optional[str] = None,
     ) -> ExecutionResult:
-        """Run an arbitrary command list in the working dir sandbox."""
-        import time
-
-        safe_env = _build_safe_env(env)
-        cmd_str = shlex.join(command)
-        start = time.monotonic()
-
-        try:
-            proc = subprocess.run(
-                command,
-                cwd=self.working_dir,
-                env=safe_env,
-                input=stdin_data,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.timeout,
-            )
-            elapsed = time.monotonic() - start
-
-            return ExecutionResult(
-                command=cmd_str,
-                exit_code=proc.returncode,
-                stdout=proc.stdout[:self.max_output_bytes],
-                stderr=proc.stderr[:self.max_output_bytes],
-                timed_out=False,
-                duration_seconds=elapsed,
-            )
-
-        except subprocess.TimeoutExpired as exc:
-            elapsed = time.monotonic() - start
-            return ExecutionResult(
-                command=cmd_str,
-                exit_code=-1,
-                stdout=_coerce_output(exc.stdout)[:self.max_output_bytes],
-                stderr=_coerce_output(exc.stderr)[:self.max_output_bytes],
-                timed_out=True,
-                duration_seconds=elapsed,
-            )
-
-        except FileNotFoundError:
-            elapsed = time.monotonic() - start
-            return ExecutionResult(
-                command=cmd_str,
-                exit_code=127,
-                stdout="",
-                stderr=f"Command not found: {command[0]}",
-                timed_out=False,
-                duration_seconds=elapsed,
-            )
-
-        except Exception as exc:
-            elapsed = time.monotonic() - start
-            return ExecutionResult(
-                command=cmd_str,
-                exit_code=-2,
-                stdout="",
-                stderr=f"Sandbox error: {exc}",
-                timed_out=False,
-                duration_seconds=elapsed,
-            )
+        """Execute a command list in the sandbox and capture its result."""
 
     def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
         """Run the project's test suite using a named runner."""
@@ -757,6 +701,93 @@ class SubprocessSandbox:
         return self.run(cmd + [abs_path])
 
 
+class SubprocessSandbox(Sandbox):
+    """
+    Subprocess-based sandbox (no Docker required).
+    Suitable for trusted local repos. For untrusted code, use DockerSandbox.
+    """
+
+    def __init__(
+        self,
+        working_dir: str,
+        timeout_seconds: int = 60,
+        max_output_bytes: int = 1024 * 1024,
+    ):
+        self.working_dir = os.path.abspath(working_dir)
+        self.timeout = timeout_seconds
+        self.max_output_bytes = max_output_bytes
+
+    def run(
+        self,
+        command: list[str],
+        env: Optional[dict] = None,
+        stdin_data: Optional[str] = None,
+    ) -> ExecutionResult:
+        """Run an arbitrary command list in the working dir sandbox."""
+        import time
+
+        safe_env = _build_safe_env(env)
+        cmd_str = shlex.join(command)
+        start = time.monotonic()
+
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=self.working_dir,
+                env=safe_env,
+                input=stdin_data,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout,
+            )
+            elapsed = time.monotonic() - start
+
+            return ExecutionResult(
+                command=cmd_str,
+                exit_code=proc.returncode,
+                stdout=proc.stdout[:self.max_output_bytes],
+                stderr=proc.stderr[:self.max_output_bytes],
+                timed_out=False,
+                duration_seconds=elapsed,
+            )
+
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - start
+            return ExecutionResult(
+                command=cmd_str,
+                exit_code=-1,
+                stdout=_coerce_output(exc.stdout)[:self.max_output_bytes],
+                stderr=_coerce_output(exc.stderr)[:self.max_output_bytes],
+                timed_out=True,
+                duration_seconds=elapsed,
+            )
+
+        except FileNotFoundError:
+            elapsed = time.monotonic() - start
+            return ExecutionResult(
+                command=cmd_str,
+                exit_code=127,
+                stdout="",
+                stderr=f"Command not found: {command[0]}",
+                timed_out=False,
+                duration_seconds=elapsed,
+            )
+
+        except Exception as exc:
+            elapsed = time.monotonic() - start
+            return ExecutionResult(
+                command=cmd_str,
+                exit_code=-2,
+                stdout="",
+                stderr=f"Sandbox error: {exc}",
+                timed_out=False,
+                duration_seconds=elapsed,
+            )
+
+
+
 def _docker_user_flags() -> list[str]:
     """
     Run the container as the invoking user, on platforms where that means
@@ -779,7 +810,7 @@ def _docker_user_flags() -> list[str]:
     return ["--user", f"{getuid()}:{getgid()}"]
 
 
-class DockerSandbox:
+class DockerSandbox(Sandbox):
     """
     Docker-based sandbox for untrusted code.
     Falls back to SubprocessSandbox if Docker is unavailable.
@@ -857,7 +888,20 @@ class DockerSandbox:
         ]
         return cmd
 
-    def run_tests(self, runner: str = "pytest", extra_args: Optional[list[str]] = None) -> ExecutionResult:
+    def run(
+        self,
+        command: list[str],
+        env: Optional[dict] = None,
+        stdin_data: Optional[str] = None,
+    ) -> ExecutionResult:
+        """
+        Run an arbitrary command inside a container.
+
+        The container lifecycle previously lived inside run_tests, so Docker
+        could only ever run a test suite. Lifting it here is what gives the
+        inherited run_lint, run_file and run_pre_commit containerisation --
+        before, none of those methods existed on this class at all.
+        """
         if not self._docker_available:
             reason = (
                 "Docker is unavailable (no CLI on PATH, or no daemon answering). "
@@ -868,23 +912,21 @@ class DockerSandbox:
                 raise SandboxUnavailableError(reason)
 
             _LOG.warning("DockerSandbox: %s Falling back to SubprocessSandbox.", reason)
-            sb = SubprocessSandbox(self.working_dir, self.timeout)
-            result = sb.run_tests(runner, extra_args)
+            result = SubprocessSandbox(self.working_dir, self.timeout).run(
+                command, env, stdin_data
+            )
             result.sandbox = SANDBOX_SUBPROCESS_FALLBACK
             return result
 
-        runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
-        inner_cmd = runner_cmd + (extra_args or [])
         name = _new_container_name()
-        docker_cmd = self._build_docker_command(inner_cmd, name)
-
-        sb = SubprocessSandbox(self.working_dir, self.timeout)
+        docker_cmd = self._build_docker_command(command, name)
+        host = SubprocessSandbox(self.working_dir, self.timeout)
 
         _register_atexit_once()
         _ACTIVE_CONTAINERS.add(name)
         self._containers.add(name)
         try:
-            result = sb.run(docker_cmd)
+            result = host.run(docker_cmd, env, stdin_data)
             result.sandbox = SANDBOX_DOCKER
         except BaseException:
             # KeyboardInterrupt and SystemExit reach here; the CLI is gone but
@@ -896,16 +938,24 @@ class DockerSandbox:
             self._containers.discard(name)
 
         if result.timed_out:
-            # subprocess.run kills the docker CLI with SIGKILL on timeout. That
-            # signal cannot be caught or proxied, so the container keeps running
-            # -- still holding its memory and CPU reservation -- and `--rm` will
-            # not fire because the container never exits. Remove it explicitly.
-            _LOG.warning(
-                "DockerSandbox: run timed out; force-removing container %s", name
-            )
+            # subprocess.run kills the docker CLI with SIGKILL on timeout, which
+            # leaves the container running. --rm does not cover this.
             _force_remove_container(name)
 
         return result
+
+    def run_tests(
+        self, runner: str = "pytest", extra_args: Optional[list[str]] = None
+    ) -> ExecutionResult:
+        """
+        Overridden because DOCKER_RUNNERS names the interpreter inside the image
+        (`python`), not the one running the agent (`sys.executable`).
+        """
+        if not self._docker_available and not self.strict:
+            return super().run_tests(runner, extra_args)
+
+        runner_cmd = DOCKER_RUNNERS.get(runner) or ["python", "-m", "pytest"]
+        return self.run(runner_cmd + (extra_args or []))
 
     # ── cleanup surface ───────────────────────────────────────────────
 
