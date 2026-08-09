@@ -172,5 +172,6 @@ def test_no_field_was_lost():
 
     from modules.agent_loop import AgentConfig
 
-    # 46 on current main. Pinned so a field cannot be dropped unnoticed.
-    assert len(fields(AgentConfig)) == 46
+    # 49 on current main; rises as flags are added. Pinned so a field
+    # cannot be dropped unnoticed by a merge, not to freeze the count.
+    assert len(fields(AgentConfig)) == 49

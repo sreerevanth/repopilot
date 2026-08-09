@@ -1097,9 +1097,12 @@ class DockerSandbox(Sandbox):
     def __enter__(self) -> "DockerSandbox":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> None:
         self.cleanup()
-        return False  # never swallow the exception
+        # No return: -> None says the exception always propagates. Returning
+        # False did the same thing, but the bool annotation advertised that
+        # this context manager *may* suppress errors -- the opposite of the
+        # comment that sat beside it.
 
     @classmethod
     def sweep_orphaned_containers(cls) -> list[str]:

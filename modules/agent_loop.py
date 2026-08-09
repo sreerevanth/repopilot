@@ -25,6 +25,7 @@ from typing import Optional
 from modules.repo_ingestion import ingest_repository, ingest_repository_parallel, Repository
 from modules.context_builder import build_context, budget_for_model
 from modules.llm_client import (
+    MODEL,
     load_system_prompt,
     BudgetExceededError,
     FileChange,
@@ -114,7 +115,12 @@ class AgentConfig:
     quiet: bool = False                    # suppress debug-level output
     verbose_payloads: bool = False
     system_prompt_file: Optional[str] = None   # replace the default persona         # dump raw LLM request/response
-    model: Optional[str] = None
+    # Non-optional: LLMClient expects a str, and every construction path
+    # already had a default to hand. Leaving it Optional meant anything
+    # building AgentConfig directly -- the parallel path, tests, an embedding
+    # caller -- could pass None straight through to the provider SDK, where
+    # the failure surfaces far from its cause.
+    model: str = MODEL
     context_budget: Optional[int] = None   # chars; derived from the model if unset
     provider: str = "anthropic"
     fallback_provider: Optional[str] = None   # try this one if the primary is down
@@ -598,7 +604,7 @@ class AutonomousAgent:
                 if cfg.parallel:
                     repo: Repository = ingest_repository_parallel(cfg.repo_root, max_workers=cfg.workers)
                 else:
-                    repo: Repository = ingest_repository(cfg.repo_root)
+                    repo = ingest_repository(cfg.repo_root)
             except Exception as e:
                 self.logger.error(f"Repo ingestion failed: {e}")
                 outcome = "error"

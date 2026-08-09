@@ -8,10 +8,17 @@ import os
 import re
 import hashlib
 import logging
+from types import ModuleType
 from dataclasses import dataclass, field
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+
+# Declared before the try so the fallback assignment is well-typed. Without
+# it, `pathspec = None` conflicts with the inferred Module type, and every
+# later `if pathspec:` guard becomes unverifiable -- which are exactly the
+# guards that keep an un-reinstalled checkout working.
+pathspec: Optional[ModuleType]
 
 try:  # optional at runtime so an un-reinstalled checkout still works
     import pathspec
