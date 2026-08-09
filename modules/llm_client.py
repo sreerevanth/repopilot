@@ -434,6 +434,20 @@ class BaseLLMClient:
                 f"limit of ${self.max_cost:.2f}. Stopping before the next call."
             )
 
+    def usage_summary(self) -> str:
+        """
+        One line describing what this client has spent.
+
+        The budget-exceeded message called `self.llm.usage.summary()`, and no
+        `usage` attribute has ever existed -- so a run that correctly stopped at
+        its --max-cost limit then crashed while explaining why. The figures were
+        all already tracked; nothing was aggregating them.
+        """
+        return (
+            f"{self.input_tokens_used:,} input and {self.output_tokens_used:,} "
+            f"output tokens, ${self.total_cost:.4f}"
+        )
+
     def _record_usage(self, input_tok: int, output_tok: int) -> None:
         """Add one call's tokens and cost to the running totals."""
         self.input_tokens_used += input_tok
