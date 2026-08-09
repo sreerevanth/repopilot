@@ -117,6 +117,8 @@ class AgentConfig:
     model: Optional[str] = None
     context_budget: Optional[int] = None   # chars; derived from the model if unset
     provider: str = "anthropic"
+    fallback_provider: Optional[str] = None   # try this one if the primary is down
+    fallback_api_key: Optional[str] = None
 
     # Context
     force_include_paths: Optional[list] = None  # always include these files
@@ -259,6 +261,8 @@ class AutonomousAgent:
                 provider=cfg.provider,
                 verbose=cfg.verbose_payloads,
             max_cost=cfg.max_cost,
+            fallback_provider=cfg.fallback_provider,
+            fallback_api_key=cfg.fallback_api_key,
             cache=(
                 ResponseCache(cfg.repo_root, enabled=True)
                 if cfg.use_cache else None

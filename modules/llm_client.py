@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Any
-from modules.errors import ConfigurationError, ProviderError
+from modules.errors import ConfigurationError, ProviderError, AgentError
 
 _LOG = logging.getLogger("agent.llm_client")
 
@@ -886,6 +886,45 @@ class OllamaClient(BaseLLMClient):
             raise
 
 
+# Errors worth trying another provider for: the request was fine and the
+# service was not. An authentication failure, a malformed request or a budget
+# stop would fail identically on the fallback, and trying anyway would spend
+# money to produce the same error twice.
+TRANSIENT_API_MARKERS = (
+    "overloaded", "rate limit", "rate_limit", "too many requests",
+    "500", "502", "503", "504", "internal server error",
+    "bad gateway", "service unavailable", "gateway timeout",
+    "timed out", "connection reset", "connection aborted",
+)
+
+
+def is_transient_api_error(error: BaseException) -> bool:
+    """
+    True when another provider might reasonably succeed.
+
+    Matches on message text because each provider raises its own SDK's
+    exceptions, which share no base. `AgentError` from #159 covers the failures
+    this tool raises deliberately -- a budget stop among them -- and those are
+    excluded by type rather than by substring.
+    """
+    if isinstance(error, AgentError):
+        return False
+    text = f"{type(error).__name__}: {error}".lower()
+    return any(marker in text for marker in TRANSIENT_API_MARKERS)
+
+
+def _build_provider(provider, api_key, model, api_base_url=None):
+    """One provider client, by name."""
+    provider = (provider or "").lower()
+    if provider == "openai":
+        return OpenAIClient(api_key, model)
+    if provider == "gemini":
+        return GeminiClient(api_key, model)
+    if provider == "ollama":
+        return OllamaClient(model, api_base_url)
+    return AnthropicClient(api_key, model)
+
+
 class LLMClient(BaseLLMClient):
     """Facade class maintaining backward compatibility while wrapping dynamic clients."""
     
@@ -893,18 +932,22 @@ class LLMClient(BaseLLMClient):
                  provider: str = "anthropic", verbose: bool = False,
                  max_cost: Optional[float] = None,
                  api_base_url: Optional[str] = None,
+                 fallback_provider: Optional[str] = None,
+                 fallback_api_key: Optional[str] = None,
                  system_prompt: Optional[str] = None,
                  cache=None):
         super().__init__(model, verbose, max_cost, system_prompt, cache)
         self.provider = provider.lower()
-        if self.provider == "openai":
-            self.underlying_client = OpenAIClient(api_key, model)
-        elif self.provider == "gemini":
-            self.underlying_client = GeminiClient(api_key, model)
-        elif self.provider == "ollama":
-            self.underlying_client = OllamaClient(model, api_base_url)
-        else:
-            self.underlying_client = AnthropicClient(api_key, model)
+        self.underlying_client = _build_provider(
+            self.provider, api_key, model, api_base_url
+        )
+
+        # Built lazily: constructing it eagerly would demand a second SDK and a
+        # second key from everyone, including the majority who never fail over.
+        self.fallback_provider = (fallback_provider or "").lower() or None
+        self._fallback_client = None
+        self._fallback_args = (fallback_api_key or api_key, model, api_base_url)
+        self.used_fallback = False
 
         # Set once after the chain rather than in each branch: the flag applies
         # to whichever provider was chosen, and one line cannot drift.
@@ -913,8 +956,47 @@ class LLMClient(BaseLLMClient):
         self.underlying_client.system_prompt = self.system_prompt
         self.underlying_client.cache = cache
 
+    def _fallback(self):
+        """The fallback client, constructed on first need."""
+        if not self.fallback_provider:
+            return None
+        if self._fallback_client is None:
+            api_key, model, api_base_url = self._fallback_args
+            self._fallback_client = _build_provider(
+                self.fallback_provider, api_key, model, api_base_url
+            )
+            self._fallback_client.verbose = self.verbose
+            self._fallback_client.max_cost = self.max_cost
+        return self._fallback_client
+
     def _call(self, prompt: str) -> str:
-        return self.underlying_client._call(prompt)
+        """
+        Call the primary provider, falling back only on a transient failure.
+
+        A 500 or an overload means the request was fine and the service was
+        not, so another provider may answer it. An authentication failure or a
+        malformed request would fail identically on the fallback, and trying
+        anyway spends money to produce the same error twice.
+        """
+        try:
+            return self.underlying_client._call(prompt)
+        except BaseException as exc:
+            fallback = self._fallback()
+            if fallback is None or not is_transient_api_error(exc):
+                raise
+
+            _LOG.warning(
+                "%s failed (%s); retrying with %s.",
+                self.provider, type(exc).__name__, self.fallback_provider,
+            )
+            response = fallback._call(prompt)
+            # Spend on the fallback is real spend; folding it in keeps
+            # --max-cost honest across a failover.
+            self.input_tokens_used += fallback.input_tokens_used
+            self.output_tokens_used += fallback.output_tokens_used
+            self.total_cost += fallback.total_cost
+            self.used_fallback = True
+            return response
 
     def initial_request(
         self, task: str, context_str: str, plan: Optional["Plan"] = None
