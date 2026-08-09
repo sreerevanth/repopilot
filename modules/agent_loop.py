@@ -96,6 +96,7 @@ class AgentConfig:
 
     # CLI behavior
     yes: bool = False
+    no_commit: bool = False                # stage changes but leave them uncommitted
     git_push: bool = False                  # push to remote?
     git_create_pr: bool = False             # create GitHub PR?
 
@@ -342,6 +343,16 @@ class AutonomousAgent:
 
         if not self.git.has_uncommitted_changes():
             self.logger.info("  No changes to commit (files may be unchanged)")
+            return True
+
+        if self.config.no_commit:
+            # Staging already happened above, which is the whole point: the
+            # changes sit in the index for the user to inspect with
+            # `git diff --cached` and commit in their own words.
+            self.logger.info(
+                f"  --no-commit: {len(changed_paths)} file(s) staged, not committed. "
+                f"Review with `git diff --cached`, then commit when ready."
+            )
             return True
 
         msg = (

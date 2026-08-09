@@ -106,6 +106,10 @@ Examples:
                         help="Number of worker threads for parallel processing (default: 10)")
 
     # Git
+    parser.add_argument("--no-commit", action="store_true",
+                        help="Stage successful changes but do not commit them. "
+                             "Leaves them in the index for you to review and "
+                             "commit yourself.")
     parser.add_argument("--no-git", action="store_true",
                         help="Disable git operations entirely")
     parser.add_argument("--push", action="store_true",
@@ -229,6 +233,7 @@ def _run_task_batch(args) -> int:
             repo_root=worktree,
             task=task,
             git_enabled=False,
+        no_commit=args.no_commit,
             yes=True,
             max_iterations=args.max_iter,
             test_runner=args.runner,
