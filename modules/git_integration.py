@@ -419,6 +419,22 @@ class GitIntegration:
             error_body = exc.read().decode("utf-8", errors="replace")
             if exc.code == 422 and "already exists" in error_body:
                 return f"PR already exists for {head_branch} -> {base_branch}"
+
+            # Logged rather than swallowed. This returned None for a 401, a
+            # 403, a 404 and every other HTTPError alike, and the caller did
+            # not report the None either -- so a run finished, showed no PR
+            # URL, and gave no way to tell an expired token from a missing
+            # scope from a repository the token cannot see.
+            #
+            # The likeliest cause by a distance is a fine-grained PAT without
+            # pull_request:write, which is a twenty-second fix once you know.
+            # GitHub says so in the body ("Resource not accessible by personal
+            # access token"), so passing the body through is most of the fix.
+            _LOG.error(
+                "Could not create the pull request: HTTP %s. %s",
+                exc.code, error_body.strip()[:300],
+            )
             return None
-        except Exception:
+        except Exception as exc:
+            _LOG.error("Could not create the pull request: %s", exc)
             return None
