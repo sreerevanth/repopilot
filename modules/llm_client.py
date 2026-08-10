@@ -749,10 +749,19 @@ class AnthropicClient(BaseLLMClient):
     def __init__(self, api_key: Optional[str] = None, model: str = MODEL):
         super().__init__(model)
         if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+            raise ConfigurationError(
+                "The anthropic package is not installed. Run "
+                "`pip install -r requirements.txt`, or use --provider with a "
+                "provider that needs no SDK (openai, gemini and ollama all go "
+                "through urllib)."
+            )
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
-            raise ValueError("ANTHROPIC_API_KEY not set")
+            raise ConfigurationError(
+                "ANTHROPIC_API_KEY is not set. Export it before running, or pass "
+                "--provider with a provider whose key you have set. "
+                "See the README's configuration section for the full list."
+            )
         self.client = anthropic.Anthropic(api_key=key)
 
     def _call(self, prompt: str) -> str:
@@ -824,7 +833,11 @@ class OpenAIClient(BaseLLMClient):
         super().__init__(model)
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
-            raise ValueError("OPENAI_API_KEY not set")
+            raise ConfigurationError(
+                "OPENAI_API_KEY is not set. Export it before running, or pass "
+                "--provider with a provider whose key you have set. "
+                "See the README's configuration section for the full list."
+            )
 
     def _call(self, prompt: str) -> str:
         print("  [Streaming LLM Response (OpenAI)]: ", end="", flush=True)
@@ -862,7 +875,11 @@ class GeminiClient(BaseLLMClient):
         super().__init__(model)
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY not set")
+            raise ConfigurationError(
+                "GEMINI_API_KEY is not set. Export it before running, or pass "
+                "--provider with a provider whose key you have set. "
+                "See the README's configuration section for the full list."
+            )
 
     def _call(self, prompt: str) -> str:
         print("  [Streaming LLM Response (Gemini)]: ", end="", flush=True)
