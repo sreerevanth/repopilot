@@ -8,6 +8,10 @@ __pycache__/
 # Environment and secrets
 .env
 .env.*
+# ...but the committed template is the point: `.env.*` matched `.env.example`,
+# so the file every project uses to document required variables could not be
+# added without this negation.
+!.env.example
 *.key
 *.pem
 *.p12
