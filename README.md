@@ -612,7 +612,7 @@ python main.py --repo . --task "Fix the failing parser test"
 
 ---
 
-### `dashboard.py` — run viewer
+### `modules/dashboard` — run viewer (terminal)
 
 Renders a run log as a readable timeline — the model's analysis, its file
 changes, and the test output for each iteration:
@@ -624,6 +624,19 @@ python -m modules.dashboard logs/agent_20260807_abc.jsonl --follow
 
 `--follow` tails the log while a run is in progress, so a long run is visible as
 it happens rather than scrolling past in CLI output.
+
+### `dashboard_server.py` — run viewer (web)
+
+A separate, zero-dependency web UI over the same logs:
+
+```bash
+python dashboard_server.py                    # http://127.0.0.1:8080
+python dashboard_server.py --host 0.0.0.0     # reachable from other machines
+```
+
+It binds loopback by default. `--host 0.0.0.0` exposes run summaries — task
+text, repository paths, and the model's analysis — to anyone who can reach the
+machine, and the server warns when you use it.
 
 It reads the JSONL `logger.py` already writes rather than being instrumented
 into the loop. That keeps it decoupled: it works on a finished run, on a run in

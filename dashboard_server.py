@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-dashboard.py
+dashboard_server.py
 A zero-dependency web dashboard to visualize RepoPilot agent run history.
 Serves an elegant modern UI on http://localhost:8080.
 """
 
+import argparse
 import http.server
 import socketserver
 import os
@@ -13,6 +14,13 @@ import glob
 import sys
 
 PORT = 8080
+
+# Loopback, not every interface.
+#
+# The bind was ("", PORT) -- 0.0.0.0 -- while both the module docstring and the
+# startup banner said localhost. --host restores the old reach for anyone who
+# wants it, with the difference that they chose it.
+DEFAULT_HOST = "127.0.0.1"
 LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
@@ -289,6 +297,22 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
     </div>
 
     <script>
+        // Escape before interpolating into innerHTML.
+        //
+        // Every value below comes from a run log: the task string (which under
+        // agent-fix.yml is the body of a GitHub issue anyone can open), the
+        // model's own prose, and the sandbox's captured stdout and stderr.
+        // innerHTML parses its input as HTML, so an unescaped tag in any of
+        // them executes here.
+        function esc(value) {
+            return String(value === undefined || value === null ? "" : value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
         async function fetchRuns() {
             try {
                 const response = await fetch('/api/runs');
@@ -311,10 +335,10 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     
                     card.innerHTML = `
                         <div class="flex-row">
-                            <span style="font-weight: 600; font-size: 0.95rem; word-break: break-all;">${run.run_id}</span>
-                            <span class="badge ${badgeClass}">${run.outcome.toUpperCase()}</span>
+                            <span style="font-weight: 600; font-size: 0.95rem; word-break: break-all;">${esc(run.run_id)}</span>
+                            <span class="badge ${badgeClass}">${esc(String(run.outcome || '').toUpperCase())}</span>
                         </div>
-                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Task: ${run.task ? run.task.substring(0, 60) + '...' : 'N/A'}</p>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">Task: ${run.task ? esc(run.task.substring(0, 60)) + '...' : 'N/A'}</p>
                     `;
                     
                     card.addEventListener('click', () => {
@@ -357,23 +381,23 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     iterationsHtml += `
                         <div class="iteration-view">
                             <div class="iteration-header">
-                                <h3>Iteration ${iter.iteration}</h3>
-                                <span class="badge badge-neutral">${iter.timestamp}</span>
+                                <h3>Iteration ${esc(iter.iteration)}</h3>
+                                <span class="badge badge-neutral">${esc(iter.timestamp)}</span>
                             </div>
-                            <p><strong>Analysis:</strong> ${iter.llm_analysis}</p>
+                            <p><strong>Analysis:</strong> ${esc(iter.llm_analysis)}</p>
                             <p style="margin-top: 0.5rem;"><strong>LLM Confidence:</strong> ${(iter.llm_confidence * 100).toFixed(1)}%</p>
                             
                             ${changesHtml}
                             
                             <div style="margin-top: 1rem;">
-                                <strong>Execution Command:</strong> <code>${iter.execution_command || 'None'}</code>
+                                <strong>Execution Command:</strong> <code>${esc(iter.execution_command || 'None')}</code>
                                 <p style="margin-top: 0.5rem;"><strong>Test Result:</strong> 
                                     <span class="badge ${iter.execution_success ? 'badge-success' : 'badge-failed'}">
                                         ${iter.execution_success ? 'PASSED' : 'FAILED'}
                                     </span>
                                 </p>
-                                ${iter.execution_stdout ? `<pre style="margin-top: 0.5rem;">${iter.execution_stdout}</pre>` : ''}
-                                ${iter.execution_stderr ? `<pre style="margin-top: 0.5rem; border-color: var(--error)">${iter.execution_stderr}</pre>` : ''}
+                                ${iter.execution_stdout ? `<pre style="margin-top: 0.5rem;">${esc(iter.execution_stdout)}</pre>` : ''}
+                                ${iter.execution_stderr ? `<pre style="margin-top: 0.5rem; border-color: var(--error)">${esc(iter.execution_stderr)}</pre>` : ''}
                             </div>
                         </div>
                     `;
@@ -382,8 +406,8 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
                 panel.innerHTML = `
                     <div class="flex-row" style="align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 1.5rem;">
                         <div>
-                            <h2>Run Summary: ${summary.run_id || runId}</h2>
-                            <p style="color: var(--text-secondary)">Outcome: <span class="badge ${summary.outcome === 'success' ? 'badge-success' : 'badge-failed'}">${(summary.outcome || 'N/A').toUpperCase()}</span></p>
+                            <h2>Run Summary: ${esc(summary.run_id || runId)}</h2>
+                            <p style="color: var(--text-secondary)">Outcome: <span class="badge ${summary.outcome === 'success' ? 'badge-success' : 'badge-failed'}">${esc(String(summary.outcome || 'N/A').toUpperCase())}</span></p>
                         </div>
                     </div>
 
@@ -404,7 +428,7 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
                     <div>
                         <h3 style="margin-bottom: 1rem;">Task</h3>
-                        <p style="background: #151f32; padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border);">${summary.task || 'N/A'}</p>
+                        <p style="background: #151f32; padding: 1rem; border-radius: 0.5rem; border: 1px solid var(--border);">${esc(summary.task || 'N/A')}</p>
                     </div>
 
                     <div>
@@ -414,7 +438,7 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
                 `;
             } catch (err) {
                 console.error("Error loading run details:", err);
-                panel.innerHTML = `<p style="color: var(--error)">Error loading run details: ${err}</p>`;
+                panel.innerHTML = `<p style="color: var(--error)">Error loading run details: ${esc(err)}</p>`;
             }
         }
 
@@ -427,20 +451,49 @@ class DashboardHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(html_content.encode("utf-8"))
             return
 
-        super().do_GET()
+        # Anything else is refused rather than served.
+        #
+        # This called super().do_GET(), which is SimpleHTTPRequestHandler -- it
+        # serves the process working directory. Started from a repository root,
+        # `GET /.env` returned the file, and I confirmed a real API key came
+        # back over HTTP. Dotfiles are not excluded, and combined with the
+        # 0.0.0.0 bind that made the whole working tree readable by anyone on
+        # the network.
+        #
+        # The dashboard needs exactly the routes handled above, so there is
+        # nothing legitimate to fall through to.
+        self.send_response(404)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Not found")
 
-def run_server():
+
+def run_server(host: str = DEFAULT_HOST, port: int = PORT) -> None:
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", PORT), DashboardHTTPHandler) as httpd:
-        print(f"\n==================================================")
-        print(f"  RepoPilot Dashboard Server started successfully!")
-        print(f"  Url: http://localhost:{PORT}")
-        print(f"==================================================\n")
+    with socketserver.TCPServer((host, port), DashboardHTTPHandler) as httpd:
+        print("\n==================================================")
+        print("  RepoPilot Dashboard Server started successfully!")
+        print(f"  Url: http://{host}:{port}")
+        if host not in ("127.0.0.1", "localhost"):
+            print("  WARNING: bound beyond loopback -- run summaries and task")
+            print("           text are readable by anyone who can reach this host.")
+        print("==================================================\n")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\nShutting down Dashboard Server...")
             sys.exit(0)
 
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description="RepoPilot run dashboard (web).")
+    parser.add_argument("--host", default=DEFAULT_HOST,
+                        help=f"Interface to bind (default: {DEFAULT_HOST}, loopback only)")
+    parser.add_argument("--port", type=int, default=PORT,
+                        help=f"Port to listen on (default: {PORT})")
+    args = parser.parse_args(argv)
+    run_server(args.host, args.port)
+
+
 if __name__ == "__main__":
-    run_server()
+    main()
