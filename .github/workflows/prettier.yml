@@ -8,6 +8,18 @@ on:
 
 jobs:
   prettier:
+    # Declared rather than inherited.
+    #
+    # agent-fix.yml scopes its own token; these two did not, so they took the
+    # repository default -- which for repositories created before 2023 is
+    # read/write on everything. Neither needs write: the guard job imports
+    # modules and runs --help, and the format job runs npm ci and a check.
+    #
+    # npm ci in particular executes lifecycle scripts from the lockfile, and on
+    # the push trigger that runs with a real token for this repository.
+    permissions:
+      contents: read
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
