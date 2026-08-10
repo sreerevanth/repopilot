@@ -1,8 +1,7 @@
 {
   "name": "repopilot",
   "version": "1.0.0",
-  "description": "A production-grade autonomous code modification system that reads a repository,\r understands a task, modifies code using an LLM, executes tests in a sandbox,\r and iteratively self-corrects until tests pass — then commits the result to Git.",
-  "main": "index.js",
+  "description": "Autonomous code modification agent: reads a repository, modifies code with an LLM, runs the tests in a sandbox, and iterates until they pass.",
   "scripts": {
     "test": "python -m pytest",
     "format": "prettier --write .",
@@ -10,17 +9,18 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rohitkumarnaidu/repopilot.git"
+    "url": "git+https://github.com/sreerevanth/repopilot.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/rohitkumarnaidu/repopilot/issues"
+    "url": "https://github.com/sreerevanth/repopilot/issues"
   },
-  "homepage": "https://github.com/rohitkumarnaidu/repopilot#readme",
+  "homepage": "https://github.com/sreerevanth/repopilot#readme",
   "devDependencies": {
     "prettier": "^3.9.6"
-  }
+  },
+  "private": true
 }
