@@ -106,7 +106,52 @@ def load_state(log_dir: str, run_id: str) -> RunState:
         )
 
     known = set(RunState.__dataclass_fields__)
-    return RunState(**{k: v for k, v in data.items() if k in known})
+
+    # Unknown keys were already filtered, but the values that remain were not
+    # checked. Dataclass annotations are not enforced at runtime, so a file with
+    # the right keys and wrong values loaded cleanly and failed later, somewhere
+    # else, as a type the caller was not expecting.
+    try:
+        state = RunState(**{k: v for k, v in data.items() if k in known})
+    except TypeError as exc:
+        # A missing required field raised TypeError straight out of __init__.
+        # ResumeError is an AgentError, so it reaches the handler that prints a
+        # remedy; a bare TypeError escaped as an unhandled traceback instead.
+        raise ResumeError(
+            f"State file {path} is missing a required field ({exc}). "
+            f"Start a fresh run rather than resuming."
+        ) from exc
+
+    # iteration is the one that failed silently. A negative value made the loop
+    # start below zero and run more iterations than --max-iter allows, each one
+    # a paid API call, with nothing reported. A string raised deep inside the
+    # loop instead, far from the file that caused it.
+    if not isinstance(state.iteration, int) or isinstance(state.iteration, bool):
+        raise ResumeError(
+            f"State file {path} has iteration={state.iteration!r}, which is not "
+            f"an integer. The file is corrupt; start a fresh run."
+        )
+    if state.iteration < 0:
+        raise ResumeError(
+            f"State file {path} has iteration={state.iteration}, which is "
+            f"negative. Resuming would run past --max-iter. Start a fresh run."
+        )
+
+    for field, value in (("run_id", state.run_id), ("task", state.task),
+                         ("repo_root", state.repo_root)):
+        if not isinstance(value, str):
+            raise ResumeError(
+                f"State file {path} has {field}={value!r}, expected a string. "
+                f"The file is corrupt; start a fresh run."
+            )
+
+    if not isinstance(state.last_changes, list):
+        raise ResumeError(
+            f"State file {path} has last_changes={state.last_changes!r}, "
+            f"expected a list. The file is corrupt; start a fresh run."
+        )
+
+    return state
 
 
 def list_resumable(log_dir: str) -> list[str]:
