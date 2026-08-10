@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -244,8 +245,24 @@ def write_github_output(outputs: dict[str, str]):
         try:
             with open(github_output_path, "a", encoding="utf-8") as f:
                 for k, v in outputs.items():
+                    v = str(v)
                     if "\n" in v:
-                        delimiter = "EOF"
+                        # A random delimiter per value, which is what GitHub
+                        # documents for multiline outputs.
+                        #
+                        # The fixed "EOF" it replaced could appear inside the
+                        # value: final_message is set from str(exception), so a
+                        # message containing a line that is exactly EOF closed
+                        # the heredoc early and everything after it was parsed
+                        # by the runner as further key=value outputs. That let
+                        # a crafted message set pr_url and outcome to anything,
+                        # which the workflow then posts to the issue as "a Pull
+                        # Request has been created".
+                        delimiter = f"ghadelimiter_{uuid.uuid4()}"
+                        if delimiter in v:
+                            raise ValueError(
+                                f"value for {k} contains the generated delimiter"
+                            )
                         f.write(f"{k}<<{delimiter}\n{v}\n{delimiter}\n")
                     else:
                         f.write(f"{k}={v}\n")

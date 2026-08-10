@@ -57,13 +57,32 @@ jobs:
       - name: Post Comment on Issue
         if: always()
         uses: actions/github-script@v9
+        # Step outputs arrive as environment variables rather than being
+        # interpolated into the script.
+        #
+        # GitHub substitutes ${{ }} into the script text before Node parses it,
+        # so `const message = "${{ ... }}"` is not an assignment from a
+        # variable -- it is literal source. A value containing a double quote
+        # closes the string and the rest executes, with contents:write,
+        # pull-requests:write and both secrets in scope.
+        #
+        # final_message is reachable: agent_loop sets it from str(exception) on
+        # the ingestion-failure path, and _report_expected_error does the same.
+        #
+        # The AGENT_TASK step above already passes the issue body through env:
+        # for exactly this reason; this step is where that was not applied.
+        env:
+          OUTCOME: ${{ steps.run-agent.outputs.outcome }}
+          PR_URL: ${{ steps.run-agent.outputs.pr_url }}
+          RUN_ID: ${{ steps.run-agent.outputs.run_id }}
+          FINAL_MESSAGE: ${{ steps.run-agent.outputs.final_message }}
         with:
           script: |
             const issueNumber = context.issue.number;
-            const outcome = "${{ steps.run-agent.outputs.outcome }}";
-            const prUrl = "${{ steps.run-agent.outputs.pr_url }}";
-            const runId = "${{ steps.run-agent.outputs.run_id }}";
-            const message = "${{ steps.run-agent.outputs.final_message }}";
+            const outcome = process.env.OUTCOME || "";
+            const prUrl = process.env.PR_URL || "";
+            const runId = process.env.RUN_ID || "";
+            const message = process.env.FINAL_MESSAGE || "";
             const issuee = context.payload.issue.user.login;
 
             let commentBody = "";
