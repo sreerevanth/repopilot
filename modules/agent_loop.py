@@ -1088,6 +1088,16 @@ class AutonomousAgent:
                     )
                     if self.pr_url:
                         self.logger.info(f"  PR created: {self.pr_url}")
+                    else:
+                        # Silence here read as "the feature did not run" rather
+                        # than "it ran and failed". The reason is now logged by
+                        # create_github_pr; this makes sure the user is told to
+                        # go and look for it.
+                        self.logger.warning(
+                            "  --pr was requested but no pull request was "
+                            "created. The reason is logged above; the branch "
+                            "was pushed, so you can open one by hand."
+                        )
 
         # ── Rollback on failure if rollback_on_failure ──
         if (
