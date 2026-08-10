@@ -301,6 +301,22 @@ Pops the git stash taken before the changes were applied.
 
 ---
 
+## Running in Docker
+
+```bash
+docker build -t repopilot .
+docker run --rm \
+  -v "$PWD:/repo" \
+  --user "$(id -u):$(id -g)" \
+  -e ANTHROPIC_API_KEY \
+  repopilot --repo /repo --task "Fix the parser"
+```
+
+The image runs as a non-root user (uid 1000), because it executes
+model-authored code and your project's test suite. Pass `--user` when your host
+uid differs from 1000 — that lets the agent write to the mounted repository and
+stops it leaving root-owned files behind.
+
 ## Flag reference
 
 Every flag `python main.py --help` accepts, grouped by what it affects.
