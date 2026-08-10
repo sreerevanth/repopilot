@@ -17,6 +17,18 @@ on:
 
 jobs:
   imports:
+    # Declared rather than inherited.
+    #
+    # agent-fix.yml scopes its own token; these two did not, so they took the
+    # repository default -- which for repositories created before 2023 is
+    # read/write on everything. Neither needs write: the guard job imports
+    # modules and runs --help, and the format job runs npm ci and a check.
+    #
+    # npm ci in particular executes lifecycle scripts from the lockfile, and on
+    # the push trigger that runs with a real token for this repository.
+    permissions:
+      contents: read
+
     # Windows is in the matrix because three Windows-only bugs reached main
     # this cycle and none was caught here: --update walking into an ancestor
     # repository, _discover_test_files emitting backslash paths that then broke
