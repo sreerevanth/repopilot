@@ -45,6 +45,7 @@ from modules.run_state import (
     RunState,
     check_resumable,
     clear_state,
+    ResumeError,
     load_state,
     save_state,
 )
@@ -192,6 +193,24 @@ def _checkpoint(agent, cfg, iteration, last_changes, exec_result) -> None:
 # Coverage is reported to one decimal place and rounding moves it slightly
 # between runs. Failing a run for 0.05% would be noise, not a signal.
 COVERAGE_TOLERANCE = 0.5
+
+
+def _restore_changes(raw: list, run_id: str) -> list[FileChange]:
+    """
+    Rebuild FileChange objects from a state file.
+
+    Split out rather than inlined: `FileChange(**c)` raised a raw TypeError for
+    a malformed entry, and the caller only knows how to report ResumeError --
+    anything else reaches the user as a traceback. Kept a module function so
+    _run does not grow past the length guard added with #171.
+    """
+    try:
+        return [FileChange(**entry) for entry in raw]
+    except (TypeError, AttributeError) as exc:
+        raise ResumeError(
+            f"State file for run '{run_id}' has a malformed last_changes entry "
+            f"({exc}). Start a fresh run rather than resuming."
+        ) from exc
 
 
 class AutonomousAgent:
@@ -565,7 +584,7 @@ class AutonomousAgent:
             check_resumable(state, cfg.repo_root, cfg.task)
             start_iteration = state.iteration + 1
             self.branch_name = state.branch_name or self.branch_name
-            last_changes = [FileChange(**c) for c in state.last_changes]
+            last_changes = _restore_changes(state.last_changes, cfg.resume_from)
             if state.last_exit_code is not None:
                 # Rebuilt rather than stored whole: the retry prompt only reads
                 # these four fields, and persisting a full ExecutionResult would

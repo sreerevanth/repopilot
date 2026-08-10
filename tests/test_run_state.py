@@ -252,4 +252,8 @@ def test_previous_output_is_restored_for_the_retry_prompt():
 
     assert "last_exec = ExecutionResult(" in block
     assert "state.last_stderr" in block
-    assert "FileChange(**c)" in block
+    # Matched on the call rather than on `FileChange(**c)`: the reconstruction
+    # moved into _restore_changes so a malformed entry raises ResumeError
+    # instead of a bare TypeError. What matters here is that the restore still
+    # happens on the resume path, not how it is spelled.
+    assert "_restore_changes(state.last_changes" in block
