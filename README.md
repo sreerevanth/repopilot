@@ -101,6 +101,21 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+### Environment variables
+
+Copy `.env.example` and fill in what you need, or export these directly.
+
+| Variable            | When it is needed                                |
+| ------------------- | ------------------------------------------------ |
+| `ANTHROPIC_API_KEY` | the default provider                             |
+| `OPENAI_API_KEY`    | `--provider openai`                              |
+| `GEMINI_API_KEY`    | `--provider gemini`                              |
+| `GITHUB_TOKEN`      | `--push` and `--pr`; needs `pull_request: write` |
+| `GH_TOKEN`          | accepted as a fallback for `GITHUB_TOKEN`        |
+| `NO_COLOR`          | set to any value to disable coloured output      |
+
+Ollama needs no key — point `--api-base-url` at your instance.
+
 ---
 
 ## Contributing
