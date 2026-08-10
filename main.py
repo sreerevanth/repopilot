@@ -198,6 +198,12 @@ Examples:
     parser.add_argument("--provider", default="anthropic",
                         choices=["anthropic", "openai", "gemini", "ollama"],
                         help="LLM provider to use (default: anthropic)")
+    parser.add_argument("--insecure-tls", action="store_true",
+                        help="Skip TLS certificate verification for the OpenAI, "
+                             "Gemini and Ollama endpoints. For a self-signed "
+                             "local server only -- it allows anyone on the network "
+                             "path to read your API key and rewrite the model's "
+                             "response. Prefer SSL_CERT_FILE for a corporate CA.")
     parser.add_argument("--api-base-url", default=None,
                         help="Custom API base URL (for Ollama or self-hosted endpoints)")
 
@@ -489,6 +495,19 @@ def main():
     config_file = args.config or os.path.join(args.repo or ".", ".repopilot.json")
     if os.path.exists(config_file):
         apply_config_file(config_file, args, parser)
+
+    if args.insecure_tls:
+        # Printed every run rather than logged once. Someone who set this for a
+        # local Ollama server and forgot is otherwise running two public APIs
+        # unverified with nothing to remind them.
+        print(
+            "WARNING: --insecure-tls is set. Certificates are not verified for "
+            "OpenAI, Gemini or Ollama, so anyone on the network path can read "
+            "your API key and alter the model's response.",
+            file=sys.stderr,
+        )
+        set_insecure_tls(True)
+
 
 
     repo_root = os.path.abspath(args.repo)

@@ -782,6 +782,43 @@ class AnthropicClient(BaseLLMClient):
             return _first_text_block(response.content)
 
 
+# Set by --insecure-tls. Off by default: the three urllib providers below
+# previously hard-coded `check_hostname = False` and `CERT_NONE`, which accepts
+# any certificate including a self-signed one and never matches the hostname.
+#
+# On the OpenAI and Gemini paths that is a public API over the internet, so an
+# attacker on the network path could read the API key from the Authorization
+# header, read the prompt -- which carries the user's source -- and rewrite the
+# response, which is code this tool then writes to disk and runs.
+#
+# The likely reason it was there is a local Ollama instance with a self-signed
+# certificate, or a corporate proxy with its own CA. Both are real, so the
+# capability stays; it is opt-in now, so the person disabling verification is
+# the person who decided to.
+_INSECURE_TLS = False
+
+
+def set_insecure_tls(enabled: bool) -> None:
+    """Enable or disable certificate verification for the urllib providers."""
+    global _INSECURE_TLS
+    _INSECURE_TLS = bool(enabled)
+
+
+def _tls_context() -> ssl.SSLContext:
+    """
+    A verifying TLS context, unless --insecure-tls was passed.
+
+    For a corporate CA the correct answer is `SSL_CERT_FILE` or
+    `create_default_context(cafile=...)`, both of which keep verification on --
+    this switch exists for the self-signed case where neither applies.
+    """
+    context = ssl.create_default_context()
+    if _INSECURE_TLS:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 class OpenAIClient(BaseLLMClient):
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
         super().__init__(model)
@@ -808,9 +845,7 @@ class OpenAIClient(BaseLLMClient):
         }
         
         req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = _tls_context()
 
         try:
             with urllib.request.urlopen(req, context=ctx) as response:
@@ -850,9 +885,7 @@ class GeminiClient(BaseLLMClient):
         }
 
         req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = _tls_context()
 
         try:
             with urllib.request.urlopen(req, context=ctx) as response:
@@ -891,9 +924,7 @@ class OllamaClient(BaseLLMClient):
         }
 
         req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx = _tls_context()
 
         try:
             with urllib.request.urlopen(req, context=ctx) as response:
