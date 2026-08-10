@@ -195,10 +195,17 @@ def extract_outline(source: str, path: str) -> Optional[str]:
             for child in node.body:
                 # Annotated fields are the whole point of a dataclass or a
                 # Protocol, so they belong in the outline alongside methods.
-                is_field = isinstance(child, ast.AnnAssign) and isinstance(
+                # Inlined rather than bound to `is_field` first. mypy narrows
+                # a type on an isinstance check written in the condition, not
+                # through a boolean variable -- so the bound form lost the
+                # narrowing and reported `"stmt" has no attribute "annotation"`
+                # and `... "target"` on the two lines below.
+                #
+                # The code was correct either way; this is the same check in
+                # the form a checker can follow.
+                if isinstance(child, ast.AnnAssign) and isinstance(
                     child.target, ast.Name
-                )
-                if is_field:
+                ):
                     annotation = ast.unparse(child.annotation)
                     body.append(f"    {child.target.id}: {annotation}")
                 elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
